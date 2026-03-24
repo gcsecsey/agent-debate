@@ -1,0 +1,345 @@
+"""Orchestrator — the core debate loop."""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import AsyncIterator
+
+from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk.types import AssistantMessage, TextBlock
+
+from .prompts import (
+    build_debate_prompt,
+    build_disagreement_prompt,
+    build_round1_prompt,
+    build_synthesis_prompt,
+    get_persona,
+    get_persona_name,
+)
+from .providers import get_provider
+from .providers.base import BaseProvider
+from .streaming import collect_responses, fan_out_streaming
+from .types import (
+    AgentResponse,
+    DebateConfig,
+    DebateEvent,
+    Disagreement,
+    EventType,
+    ProviderConfig,
+)
+
+
+class Orchestrator:
+    """Manages the multi-agent debate: fan-out, disagreement detection, debate rounds, synthesis."""
+
+    def __init__(self, config: DebateConfig) -> None:
+        self.config = config
+        self._providers: dict[str, BaseProvider] = {}
+        self._init_providers()
+
+    def _init_providers(self) -> None:
+        """Instantiate provider adapters, checking availability."""
+        for pc in self.config.providers:
+            if pc.provider not in self._providers:
+                provider_cls = get_provider(pc.provider)
+                provider = provider_cls()
+                if not provider.available():
+                    raise RuntimeError(
+                        f"Provider '{pc.provider}' is not available. "
+                        f"Is the CLI installed?"
+                    )
+                self._providers[pc.provider] = provider
+
+    def _agent_id(self, index: int, pc: ProviderConfig) -> str:
+        """Generate a unique agent ID, handling duplicates."""
+        base = pc.agent_id
+        # Check if there are duplicates
+        all_ids = [p.agent_id for p in self.config.providers]
+        if all_ids.count(base) > 1:
+            # Find which occurrence this is
+            occurrence = sum(
+                1 for i, p in enumerate(self.config.providers[:index])
+                if p.agent_id == base
+            )
+            return f"{base}#{occurrence + 1}"
+        return base
+
+    async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
+        """Run the full debate loop, yielding events as they occur."""
+
+        # Phase 1: Independent analysis (parallel fan-out)
+        yield DebateEvent(type=EventType.ROUND_START, round_number=1)
+        round1_responses = await self._fan_out(prompt, round_number=1)
+        for r in round1_responses:
+            yield DebateEvent(
+                type=EventType.AGENT_COMPLETED,
+                agent_id=r.agent_id,
+                round_number=1,
+                content=r.content[:200] + "..." if len(r.content) > 200 else r.content,
+            )
+
+        # Phase 2: Detect disagreements
+        disagreements = await self._detect_disagreements(prompt, round1_responses)
+
+        all_responses = [round1_responses]
+
+        if not disagreements:
+            yield DebateEvent(type=EventType.CONSENSUS_REACHED, round_number=1)
+        else:
+            for d in disagreements:
+                yield DebateEvent(
+                    type=EventType.DISAGREEMENT_FOUND,
+                    content=d.topic,
+                    metadata={"positions": d.positions},
+                )
+
+            # Phase 3: Adaptive debate rounds
+            latest_responses = round1_responses
+            round_num = 2
+
+            while disagreements and round_num <= self.config.max_rounds:
+                yield DebateEvent(
+                    type=EventType.DEBATE_ROUND_START,
+                    round_number=round_num,
+                )
+
+                latest_responses = await self._debate_round(
+                    prompt, latest_responses, disagreements, round_num
+                )
+                all_responses.append(latest_responses)
+
+                for r in latest_responses:
+                    yield DebateEvent(
+                        type=EventType.AGENT_COMPLETED,
+                        agent_id=r.agent_id,
+                        round_number=round_num,
+                        content=r.content[:200] + "..." if len(r.content) > 200 else r.content,
+                    )
+
+                new_disagreements = await self._detect_disagreements(
+                    prompt, latest_responses, previous=disagreements
+                )
+
+                if self._converged(disagreements, new_disagreements):
+                    yield DebateEvent(
+                        type=EventType.CONSENSUS_REACHED,
+                        round_number=round_num,
+                    )
+                    disagreements = new_disagreements
+                    break
+
+                disagreements = new_disagreements
+                round_num += 1
+
+        # Phase 4: Synthesis
+        yield DebateEvent(type=EventType.SYNTHESIS_START)
+        synthesis = await self._synthesize(prompt, all_responses, disagreements)
+        yield DebateEvent(
+            type=EventType.SYNTHESIS_COMPLETE,
+            content=synthesis,
+        )
+
+    async def _fan_out(
+        self, prompt: str, round_number: int
+    ) -> list[AgentResponse]:
+        """Run all agents in parallel for independent analysis."""
+
+        async def run_agent(
+            index: int, pc: ProviderConfig
+        ) -> AgentResponse:
+            provider = self._providers[pc.provider]
+            agent_id = self._agent_id(index, pc)
+            persona = get_persona(index, pc.persona)
+            persona_name = get_persona_name(index)
+            full_prompt = build_round1_prompt(prompt, persona)
+
+            chunks: list[str] = []
+            async for chunk in provider.analyze(
+                prompt=full_prompt,
+                system_prompt=persona,
+                cwd=self.config.cwd,
+                model=pc.model,
+            ):
+                chunks.append(chunk)
+
+            return AgentResponse(
+                agent_id=agent_id,
+                provider=pc.provider,
+                model=pc.model,
+                round_number=round_number,
+                content="".join(chunks),
+                persona=persona_name,
+            )
+
+        coroutines = [
+            run_agent(i, pc) for i, pc in enumerate(self.config.providers)
+        ]
+
+        events: list = []
+        async for event in fan_out_streaming(coroutines):
+            events.append(event)
+
+        return collect_responses(events)
+
+    async def _debate_round(
+        self,
+        prompt: str,
+        prior_responses: list[AgentResponse],
+        disagreements: list[Disagreement],
+        round_number: int,
+    ) -> list[AgentResponse]:
+        """Run a debate round where agents respond to each other."""
+
+        response_by_id = {r.agent_id: r for r in prior_responses}
+
+        async def run_debate_agent(
+            index: int, pc: ProviderConfig
+        ) -> AgentResponse:
+            provider = self._providers[pc.provider]
+            agent_id = self._agent_id(index, pc)
+            persona = get_persona(index, pc.persona)
+            persona_name = get_persona_name(index)
+
+            own_prior = response_by_id.get(agent_id)
+            if own_prior is None:
+                # Fallback: agent wasn't in prior round, treat as new
+                full_prompt = build_round1_prompt(prompt, persona)
+            else:
+                others = [r for r in prior_responses if r.agent_id != agent_id]
+                full_prompt = build_debate_prompt(
+                    user_prompt=prompt,
+                    persona=persona,
+                    own_prior=own_prior,
+                    other_responses=others,
+                    disagreements=disagreements,
+                    round_number=round_number,
+                )
+
+            chunks: list[str] = []
+            async for chunk in provider.analyze(
+                prompt=full_prompt,
+                system_prompt=persona,
+                cwd=self.config.cwd,
+                model=pc.model,
+            ):
+                chunks.append(chunk)
+
+            return AgentResponse(
+                agent_id=agent_id,
+                provider=pc.provider,
+                model=pc.model,
+                round_number=round_number,
+                content="".join(chunks),
+                persona=persona_name,
+            )
+
+        coroutines = [
+            run_debate_agent(i, pc) for i, pc in enumerate(self.config.providers)
+        ]
+
+        events: list = []
+        async for event in fan_out_streaming(coroutines):
+            events.append(event)
+
+        return collect_responses(events)
+
+    async def _detect_disagreements(
+        self,
+        prompt: str,
+        responses: list[AgentResponse],
+        previous: list[Disagreement] | None = None,
+    ) -> list[Disagreement]:
+        """Use Claude to identify disagreements between agent responses."""
+        detection_prompt = build_disagreement_prompt(prompt, responses)
+
+        result_chunks: list[str] = []
+        options = ClaudeAgentOptions(
+            model=self.config.orchestrator_model,
+            max_turns=1,
+        )
+
+        async for message in query(prompt=detection_prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        result_chunks.append(block.text)
+
+        raw = "".join(result_chunks)
+        return self._parse_disagreements(raw)
+
+    @staticmethod
+    def _parse_disagreements(raw: str) -> list[Disagreement]:
+        """Parse JSON disagreements from the orchestrator's response."""
+        # Extract JSON array from potentially wrapped response
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if not json_match:
+            return []
+
+        try:
+            data = json.loads(json_match.group())
+        except json.JSONDecodeError:
+            return []
+
+        disagreements = []
+        for item in data:
+            if isinstance(item, dict) and "topic" in item:
+                disagreements.append(
+                    Disagreement(
+                        topic=item["topic"],
+                        positions=item.get("positions", {}),
+                        questions=item.get("questions", []),
+                    )
+                )
+        return disagreements
+
+    @staticmethod
+    def _converged(
+        old: list[Disagreement], new: list[Disagreement]
+    ) -> bool:
+        """Check if disagreements have converged (resolved or deadlocked)."""
+        if not new:
+            return True  # All resolved
+
+        # Deadlock: same topics with same positions
+        old_topics = {d.topic for d in old}
+        new_topics = {d.topic for d in new}
+
+        if old_topics == new_topics:
+            # Check if positions changed
+            old_positions = {
+                d.topic: frozenset(d.positions.values()) for d in old
+            }
+            new_positions = {
+                d.topic: frozenset(d.positions.values()) for d in new
+            }
+            if old_positions == new_positions:
+                return True  # Deadlock — no progress
+
+        # Some topics resolved, some new — not converged yet
+        return len(new) < len(old)
+
+    async def _synthesize(
+        self,
+        prompt: str,
+        all_responses: list[list[AgentResponse]],
+        disagreements: list[Disagreement],
+    ) -> str:
+        """Produce the final synthesis using Claude."""
+        synthesis_prompt = build_synthesis_prompt(
+            prompt, all_responses, disagreements
+        )
+
+        result_chunks: list[str] = []
+        options = ClaudeAgentOptions(
+            model=self.config.orchestrator_model,
+            max_turns=1,
+        )
+
+        async for message in query(prompt=synthesis_prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        result_chunks.append(block.text)
+
+        return "".join(result_chunks)

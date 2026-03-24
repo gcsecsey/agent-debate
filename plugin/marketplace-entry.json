@@ -1,0 +1,17 @@
+{
+  "_comment": "Add this entry to the 'plugins' array in .claude-plugin/marketplace.json",
+  "name": "debate",
+  "description": "Multi-agent debate: fan out prompts to multiple AI coding agents, let them debate disagreements, and synthesize a consensus recommendation",
+  "source": "./plugins/debate",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gergely Csecsey",
+    "email": "gergely.csecsey@automattic.com"
+  },
+  "license": "GPL-2.0-only",
+  "strict": true,
+  "skills": [],
+  "commands": [
+    "./commands/debate.md"
+  ]
+}

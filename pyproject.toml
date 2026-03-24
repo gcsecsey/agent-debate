@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-debate"
+version = "0.1.0"
+description = "Multi-agent debate system — fan out prompts to AI coding agents, let them debate, synthesize results"
+readme = "README.md"
+license = "GPL-2.0-only"
+requires-python = ">=3.10"
+dependencies = [
+    "claude-agent-sdk>=0.0.20",
+    "click>=8.0",
+    "anyio>=4.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-anyio>=0.0.0",
+]
+
+[project.scripts]
+agent-debate = "agent_debate.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_debate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
