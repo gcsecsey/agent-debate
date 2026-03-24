@@ -8,16 +8,14 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
 
 from .config import build_config
 from .orchestrator import Orchestrator
 from .providers import discover_available
-from .types import AgentResponse, DebateEvent, EventType
+from .types import AgentResponse, EventType
 
 console = Console()
 
-# Max lines shown per agent before collapsing
 AGENT_PREVIEW_LINES = 30
 
 
@@ -26,9 +24,7 @@ class LiveDebateDisplay:
 
     def __init__(self) -> None:
         self._agent_buffers: dict[str, str] = {}
-        self._agent_status: dict[str, str] = {}  # "streaming" | "done"
-        self._completed_panels: list[Panel] = []
-        self._phase_header: str = ""
+        self._agent_status: dict[str, str] = {}
         self._live: Live | None = None
 
     def start(self) -> Live:
@@ -41,7 +37,6 @@ class LiveDebateDisplay:
         return self._live
 
     def set_phase(self, text: str, style: str = "blue") -> None:
-        self._phase_header = text
         self._flush_static(Panel(f"[bold]{text}[/bold]", style=style))
 
     def agent_started(self, agent_id: str) -> None:
@@ -58,19 +53,20 @@ class LiveDebateDisplay:
         self._agent_status[agent_id] = "done"
         self._update()
 
+    def clear_agents(self) -> None:
+        self._agent_buffers.clear()
+        self._agent_status.clear()
+        self._update()
+
     def add_static(self, panel: Panel) -> None:
         self._flush_static(panel)
 
     def _flush_static(self, panel: Panel) -> None:
-        """Print a static panel above the live display."""
         if self._live is not None:
             self._live.console.print(panel)
 
     def _render(self) -> Group:
-        """Render the current state as a Rich Group."""
         renderables = []
-
-        # Show each active/completed agent
         for agent_id, buffer in self._agent_buffers.items():
             status = self._agent_status.get(agent_id, "streaming")
             lines = buffer.strip().split("\n")
@@ -83,7 +79,6 @@ class LiveDebateDisplay:
                 border = "green"
                 suffix = f" [dim]({total_lines} lines)[/dim]"
 
-            # Collapse long output: show first and last lines
             if total_lines > AGENT_PREVIEW_LINES:
                 visible = (
                     lines[:15]
@@ -95,9 +90,7 @@ class LiveDebateDisplay:
                 display_text = buffer.strip()
 
             title = f"[bold]{agent_id}[/bold]{suffix}"
-            renderables.append(
-                Panel(display_text, title=title, border_style=border)
-            )
+            renderables.append(Panel(display_text, title=title, border_style=border))
 
         return Group(*renderables)
 
@@ -137,7 +130,7 @@ async def _run(
     with display.start():
         async for event in orchestrator.run(prompt):
             if isinstance(event, AgentResponse):
-                continue  # Already handled via chunk events
+                continue
 
             match event.type:
                 case EventType.ROUND_START:
@@ -147,17 +140,14 @@ async def _run(
                     )
                 case EventType.AGENT_STARTED:
                     display.agent_started(event.agent_id or "unknown")
-
                 case EventType.AGENT_CHUNK:
                     display.agent_chunk(event.agent_id or "unknown", event.content)
-
                 case EventType.AGENT_COMPLETED:
                     display.agent_completed(event.agent_id or "unknown")
-
                 case EventType.DISAGREEMENT_FOUND:
                     positions = event.metadata.get("positions", {})
                     pos_text = "\n".join(
-                        f"  {k}: {v}" for k, v in positions.items()
+                        f"  {key}: {value}" for key, value in positions.items()
                     )
                     display.add_static(
                         Panel(
@@ -166,16 +156,12 @@ async def _run(
                             border_style="yellow",
                         )
                     )
-
                 case EventType.DEBATE_ROUND_START:
-                    # Clear agent buffers for new round
-                    display._agent_buffers.clear()
-                    display._agent_status.clear()
+                    display.clear_agents()
                     display.set_phase(
                         f"Debate Round {event.round_number}",
                         style="cyan",
                     )
-
                 case EventType.CONSENSUS_REACHED:
                     display.add_static(
                         Panel(
@@ -183,16 +169,20 @@ async def _run(
                             style="green",
                         )
                     )
-
+                case EventType.DEADLOCK_RESOLVED:
+                    display.clear_agents()
+                    display.add_static(
+                        Panel(
+                            Markdown(event.content),
+                            title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
+                            border_style="red",
+                        )
+                    )
                 case EventType.SYNTHESIS_START:
-                    # Clear streaming panels before synthesis
-                    display._agent_buffers.clear()
-                    display._agent_status.clear()
-                    display._update()
+                    display.clear_agents()
                     display.add_static(
                         Panel("[bold]Synthesizing results...[/bold]", style="magenta")
                     )
-
                 case EventType.SYNTHESIS_COMPLETE:
                     display.add_static(
                         Panel(
@@ -201,7 +191,6 @@ async def _run(
                             border_style="magenta",
                         )
                     )
-
                 case EventType.ERROR:
                     display.add_static(
                         Panel(
@@ -266,9 +255,7 @@ def run(
 
         agent-debate run -r 2 -d ./my-project "Plan the database migration"
     """
-    anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model
-    )
+    anyio.run(_run, prompt, providers, max_rounds, cwd, orchestrator_model)
 
 
 @main.command()

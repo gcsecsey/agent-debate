@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .types import AgentResponse, Disagreement
+from .types import AgentResponse, Disagreement, PositionUpdate
 
 # --- Default personas ---
 
@@ -92,6 +92,34 @@ def build_round1_prompt(user_prompt: str, persona: str) -> str:
     return ROUND_1_TEMPLATE.format(prompt=user_prompt, persona=persona)
 
 
+def _format_position_updates(updates: list[PositionUpdate]) -> str:
+    """Format structured position updates for judge-facing prompts."""
+    if not updates:
+        return "No structured position updates provided."
+
+    return "\n".join(
+        (
+            f"- Topic: {update.topic}\n"
+            f"  Previous: {update.previous_position}\n"
+            f"  Next: {update.next_position}\n"
+            f"  Change: {update.change_type}\n"
+            f"  Convinced By: {update.convincing_argument or 'None stated'}\n"
+            f"  Confidence: {update.confidence}\n"
+            f"  Remaining Concern: {update.remaining_concern or 'None stated'}"
+        )
+        for update in updates
+    )
+
+
+def _format_response_for_judge(response: AgentResponse) -> str:
+    """Format an agent response with any parsed structured updates."""
+    updates = _format_position_updates(response.position_updates)
+    return (
+        f"**{response.agent_id}** ({response.persona}):\n\n{response.content}\n\n"
+        f"Structured Position Updates:\n{updates}"
+    )
+
+
 # --- Round 2+: Debate ---
 
 DEBATE_ROUND_TEMPLATE = """\
@@ -119,9 +147,15 @@ The orchestrator identified these specific points of disagreement:
 
 ## Instructions
 
-Respond to each disagreement point above. For each one, you may:
+Respond as a strong self-advocate for your current view. Do not optimize for
+artificial agreement. Engage the strongest opposing arguments directly, defend
+your recommendation where it still holds, and only change your position when a
+specific argument genuinely changes your mind.
+
+For each disagreement point above, you may:
 - **Maintain** your position with additional reasoning or evidence
-- **Concede** if another agent makes a compelling argument
+- **Revise** your position if another agent exposed a real weakness
+- **Concede** if another agent made the stronger case
 - **Propose a compromise** that addresses both perspectives
 
 Be specific and constructive. Reference concrete implementation details.
@@ -129,13 +163,36 @@ Be specific and constructive. Reference concrete implementation details.
 Structure your response:
 
 ### Response to Disagreements
-Address each disagreement point by number.
+Address each disagreement point by number. For each point, first state your
+current position clearly, then rebut or accept the strongest counterargument.
 
 ### Updated Recommendation
 Your revised recommendation (if anything changed). If unchanged, briefly restate why.
 
 ### Remaining Concerns
 Any unresolved issues or new concerns raised by the debate.
+
+### Structured Position Updates
+End with a ```json fenced code block containing a JSON array with one object per
+disagreement topic, using this exact schema:
+
+```json
+[
+  {{
+    "topic": "Short topic name",
+    "previous_position": "Your prior stance in one sentence",
+    "next_position": "Your current stance in one sentence",
+    "change_type": "maintain|revise|concede|compromise",
+    "convincing_argument": "The specific argument that changed or reinforced your position",
+    "confidence": "high|medium|low",
+    "remaining_concern": "Any unresolved concern, or an empty string"
+  }}
+]
+```
+
+If your view did not change, set `change_type` to `maintain`, keep
+`previous_position` and `next_position` aligned, and still fill in the
+`convincing_argument` field with the strongest argument you considered.
 """
 
 
@@ -149,8 +206,7 @@ def build_debate_prompt(
 ) -> str:
     """Build the prompt for a debate round."""
     others_text = "\n\n---\n\n".join(
-        f"**{r.agent_id}** ({r.persona}):\n\n{r.content}"
-        for r in other_responses
+        _format_response_for_judge(r) for r in other_responses
     )
 
     disagreements_text = "\n\n".join(
@@ -164,7 +220,7 @@ def build_debate_prompt(
         persona=persona,
         round_number=round_number,
         prompt=user_prompt,
-        own_prior_response=own_prior.content,
+        own_prior_response=_format_response_for_judge(own_prior),
         other_responses=others_text,
         disagreements=disagreements_text,
     )
@@ -191,6 +247,10 @@ Ignore:
 - Stylistic differences in explanation
 - Different emphasis on the same underlying point
 - Complementary (non-conflicting) perspectives
+
+When an agent provides structured position updates, treat those updates as the
+authoritative record of whether the agent maintained, revised, conceded, or
+compromised on a disagreement.
 
 For each genuine disagreement, provide:
 1. A concise topic (one line)
@@ -221,13 +281,48 @@ def build_disagreement_prompt(
 ) -> str:
     """Build the prompt for the orchestrator to detect disagreements."""
     responses_text = "\n\n---\n\n".join(
-        f"**{r.agent_id}** ({r.persona}):\n\n{r.content}"
-        for r in responses
+        _format_response_for_judge(r) for r in responses
     )
     return DISAGREEMENT_DETECTION_TEMPLATE.format(
         prompt=user_prompt,
         responses=responses_text,
     )
+
+
+DEADLOCK_RESOLUTION_TEMPLATE = """\
+You are the judge in a multi-agent technical debate. The agents have stopped
+making meaningful progress and you must resolve the deadlock.
+
+## Original Request
+
+{prompt}
+
+## Debate History
+
+{debate_history}
+
+## Remaining Disagreements
+
+{disagreements}
+
+## Instructions
+
+Resolve the deadlock now. Do not ask the agents for more input.
+
+Produce a clear decision with these sections:
+
+### Resolution
+State the approach that should win, or the concrete compromise that should be adopted.
+
+### Why This Resolves The Deadlock
+Name the strongest arguments that matter most and explain why they outweigh the alternatives.
+
+### Risks To Watch
+List the main downsides or assumptions that still need verification.
+
+### Next Steps
+Give concrete follow-up actions the user should take.
+"""
 
 
 # --- Synthesis ---
@@ -247,6 +342,10 @@ for the user.
 ## Remaining Disagreements
 
 {disagreements}
+
+## Judge Deadlock Resolution
+
+{judge_resolution}
 
 ## Instructions
 
@@ -273,27 +372,63 @@ parts from each).
 """
 
 
-def build_synthesis_prompt(
+def _format_debate_history(all_responses: list[list[AgentResponse]]) -> str:
+    """Format debate history for judge prompts."""
+    history_parts = []
+    for round_num, round_responses in enumerate(all_responses, 1):
+        round_label = (
+            "Independent Analysis" if round_num == 1 else f"Debate Round {round_num}"
+        )
+        history_parts.append(f"## Round {round_num}: {round_label}\n")
+        for response in round_responses:
+            history_parts.append(f"{_format_response_for_judge(response)}\n\n---\n")
+    return "\n".join(history_parts)
+
+
+def build_deadlock_resolution_prompt(
     user_prompt: str,
     all_responses: list[list[AgentResponse]],
     disagreements: list[Disagreement],
 ) -> str:
-    """Build the prompt for final synthesis."""
-    history_parts = []
-    for round_num, round_responses in enumerate(all_responses, 1):
-        round_label = "Independent Analysis" if round_num == 1 else f"Debate Round {round_num}"
-        history_parts.append(f"## Round {round_num}: {round_label}\n")
-        for r in round_responses:
-            history_parts.append(f"**{r.agent_id}** ({r.persona}):\n\n{r.content}\n\n---\n")
-
-    disagreements_text = "None — agents reached consensus." if not disagreements else "\n\n".join(
+    """Build the prompt for the judge to resolve a deadlock."""
+    disagreements_text = "\n\n".join(
         f"**{d.topic}**\n"
         + "\n".join(f"  - {aid}: {pos}" for aid, pos in d.positions.items())
+        + ("\n  Questions: " + "; ".join(d.questions) if d.questions else "")
         for d in disagreements
+    )
+    return DEADLOCK_RESOLUTION_TEMPLATE.format(
+        prompt=user_prompt,
+        debate_history=_format_debate_history(all_responses),
+        disagreements=disagreements_text,
+    )
+
+
+def build_synthesis_prompt(
+    user_prompt: str,
+    all_responses: list[list[AgentResponse]],
+    disagreements: list[Disagreement],
+    deadlock_resolution: str | None = None,
+) -> str:
+    """Build the prompt for final synthesis."""
+    disagreements_text = (
+        "None — agents reached consensus."
+        if not disagreements
+        else "\n\n".join(
+            f"**{d.topic}**\n"
+            + "\n".join(f"  - {aid}: {pos}" for aid, pos in d.positions.items())
+            for d in disagreements
+        )
+    )
+
+    judge_resolution = (
+        deadlock_resolution
+        or "None — the agents converged without a judge-imposed resolution."
     )
 
     return SYNTHESIS_TEMPLATE.format(
         prompt=user_prompt,
-        debate_history="\n".join(history_parts),
+        debate_history=_format_debate_history(all_responses),
         disagreements=disagreements_text,
+        judge_resolution=judge_resolution,
     )

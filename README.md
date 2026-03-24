@@ -8,9 +8,10 @@ Inspired by [counselors](https://github.com/aarondfrancis/counselors), but with 
 
 1. Your prompt is sent to multiple agents with different perspectives (Architect, Pragmatist, Reliability Engineer)
 2. An orchestrator (Claude) identifies genuine technical disagreements between their responses
-3. Agents debate the disagreements in follow-up rounds, seeing each other's positions
-4. The orchestrator detects consensus or deadlock and stops adaptively
-5. A final synthesis presents: consensus points, resolved disagreements, remaining differences, and a recommended approach
+3. Agents debate the disagreements in follow-up rounds, explicitly advocating for their position while seeing each other's arguments
+4. In debate rounds, agents submit structured position updates so the judge can track what changed and why
+5. The orchestrator detects consensus, and if the debate deadlocks, the judge resolves it with a concrete recommendation
+6. A final synthesis presents: consensus points, resolved disagreements, remaining differences, and a recommended approach
 
 ## Supported providers
 

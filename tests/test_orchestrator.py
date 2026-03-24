@@ -15,6 +15,7 @@ from agent_debate.types import (
     DebateConfig,
     Disagreement,
     EventType,
+    PositionUpdate,
     ProviderConfig,
 )
 
@@ -52,21 +53,22 @@ class FakeProvider:
 
 def make_config(num_agents: int = 3) -> DebateConfig:
     providers = [
-        ProviderConfig(provider="claude", model=f"agent{i}")
-        for i in range(num_agents)
+        ProviderConfig(provider="claude", model=f"agent{i}") for i in range(num_agents)
     ]
     return DebateConfig(providers=providers, max_rounds=3)
 
 
 class TestParseDisagreements:
     def test_valid_json(self):
-        raw = json.dumps([
-            {
-                "topic": "JWT vs Sessions",
-                "positions": {"a1": "JWT", "a2": "Sessions"},
-                "questions": ["What scale?"],
-            }
-        ])
+        raw = json.dumps(
+            [
+                {
+                    "topic": "JWT vs Sessions",
+                    "positions": {"a1": "JWT", "a2": "Sessions"},
+                    "questions": ["What scale?"],
+                }
+            ]
+        )
         result = Orchestrator._parse_disagreements(raw)
         assert len(result) == 1
         assert result[0].topic == "JWT vs Sessions"
@@ -74,9 +76,19 @@ class TestParseDisagreements:
         assert result[0].questions == ["What scale?"]
 
     def test_json_wrapped_in_text(self):
-        raw = "Here are the disagreements:\n" + json.dumps([
-            {"topic": "DB choice", "positions": {"a1": "Postgres", "a2": "SQLite"}, "questions": []}
-        ]) + "\nThat's all."
+        raw = (
+            "Here are the disagreements:\n"
+            + json.dumps(
+                [
+                    {
+                        "topic": "DB choice",
+                        "positions": {"a1": "Postgres", "a2": "SQLite"},
+                        "questions": [],
+                    }
+                ]
+            )
+            + "\nThat's all."
+        )
         result = Orchestrator._parse_disagreements(raw)
         assert len(result) == 1
         assert result[0].topic == "DB choice"
@@ -99,36 +111,104 @@ class TestParseDisagreements:
         assert result == []
 
 
-class TestConvergence:
-    def test_empty_new_is_converged(self):
+class TestRoundClassification:
+    def test_empty_new_is_consensus(self):
         old = [Disagreement("topic", {"a": "x", "b": "y"})]
-        assert Orchestrator._converged(old, []) is True
+        assert Orchestrator._classify_round(old, [], []) == "consensus"
 
     def test_same_topics_same_positions_is_deadlock(self):
         old = [Disagreement("topic", {"a": "x", "b": "y"})]
         new = [Disagreement("topic", {"a": "x", "b": "y"})]
-        assert Orchestrator._converged(old, new) is True
+        assert Orchestrator._classify_round(old, new, []) == "deadlock"
 
-    def test_fewer_topics_is_converged(self):
+    def test_fewer_topics_is_progress(self):
         old = [
             Disagreement("topic1", {"a": "x", "b": "y"}),
             Disagreement("topic2", {"a": "p", "b": "q"}),
         ]
         new = [Disagreement("topic1", {"a": "x", "b": "y"})]
-        assert Orchestrator._converged(old, new) is True
+        assert Orchestrator._classify_round(old, new, []) == "progress"
 
-    def test_same_count_different_positions_not_converged(self):
+    def test_same_count_different_positions_is_progress(self):
         old = [Disagreement("topic", {"a": "x", "b": "y"})]
         new = [Disagreement("topic", {"a": "x", "b": "z"})]
-        assert Orchestrator._converged(old, new) is False
+        assert Orchestrator._classify_round(old, new, []) == "progress"
 
-    def test_more_topics_not_converged(self):
+    def test_position_shift_is_progress_even_if_judge_summary_matches(self):
+        old = [Disagreement("topic", {"a": "x", "b": "y"})]
+        new = [Disagreement("topic", {"a": "x", "b": "y"})]
+        responses = [
+            AgentResponse(
+                "a",
+                "claude",
+                "opus",
+                2,
+                "Updated analysis",
+                "Architect",
+                [
+                    PositionUpdate(
+                        topic="topic",
+                        previous_position="Use x",
+                        next_position="Use compromise z",
+                        change_type="compromise",
+                    )
+                ],
+            )
+        ]
+        assert Orchestrator._classify_round(old, new, responses) == "progress"
+
+    def test_more_topics_is_progress(self):
         old = [Disagreement("topic1", {"a": "x"})]
         new = [
             Disagreement("topic1", {"a": "x"}),
             Disagreement("topic2", {"a": "y"}),
         ]
-        assert Orchestrator._converged(old, new) is False
+        assert Orchestrator._classify_round(old, new, []) == "progress"
+
+
+class TestPositionUpdates:
+    def test_parse_position_updates(self):
+        raw = json.dumps(
+            [
+                {
+                    "topic": "JWT vs Sessions",
+                    "previous_position": "Use JWT",
+                    "next_position": "Use Sessions",
+                    "change_type": "revise",
+                    "convincing_argument": "Revocation matters more",
+                    "confidence": "medium",
+                    "remaining_concern": "Need Redis",
+                }
+            ]
+        )
+        result = Orchestrator._parse_position_updates(raw)
+        assert len(result) == 1
+        assert result[0].topic == "JWT vs Sessions"
+        assert result[0].change_type == "revise"
+
+    def test_extract_position_updates_from_structured_section(self):
+        raw = """### Response to Disagreements
+Keep sessions.
+
+### Structured Position Updates
+```json
+[
+  {
+    "topic": "JWT vs Sessions",
+    "previous_position": "Use JWT",
+    "next_position": "Use Sessions",
+    "change_type": "revise",
+    "convincing_argument": "Revocation matters more",
+    "confidence": "medium",
+    "remaining_concern": "Need Redis"
+  }
+]
+```
+"""
+        content, updates = Orchestrator._extract_position_updates(raw)
+        assert "Structured Position Updates" not in content
+        assert len(updates) == 1
+        assert updates[0].next_position == "Use Sessions"
 
 
 class TestAgentIdDedup:

@@ -7,10 +7,11 @@ import json
 import re
 from collections.abc import AsyncIterator
 
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, TextBlock
 
 from .prompts import (
+    build_deadlock_resolution_prompt,
     build_debate_prompt,
     build_disagreement_prompt,
     build_round1_prompt,
@@ -26,6 +27,7 @@ from .types import (
     DebateEvent,
     Disagreement,
     EventType,
+    PositionUpdate,
     ProviderConfig,
 )
 
@@ -57,7 +59,8 @@ class Orchestrator:
         all_ids = [p.agent_id for p in self.config.providers]
         if all_ids.count(base) > 1:
             occurrence = sum(
-                1 for i, p in enumerate(self.config.providers[:index])
+                1
+                for i, p in enumerate(self.config.providers[:index])
                 if p.agent_id == base
             )
             return f"{base}#{occurrence + 1}"
@@ -65,8 +68,8 @@ class Orchestrator:
 
     async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
         """Run the full debate loop, yielding events as they occur."""
+        judge_resolution: str | None = None
 
-        # Phase 1: Independent analysis (parallel fan-out with streaming)
         yield DebateEvent(type=EventType.ROUND_START, round_number=1)
 
         round1_responses: list[AgentResponse] = []
@@ -76,34 +79,32 @@ class Orchestrator:
             else:
                 yield event
 
-        # Phase 2: Detect disagreements
         disagreements = await self._detect_disagreements(prompt, round1_responses)
-
         all_responses = [round1_responses]
 
         if not disagreements:
             yield DebateEvent(type=EventType.CONSENSUS_REACHED, round_number=1)
         else:
-            for d in disagreements:
+            for disagreement in disagreements:
                 yield DebateEvent(
                     type=EventType.DISAGREEMENT_FOUND,
-                    content=d.topic,
-                    metadata={"positions": d.positions},
+                    content=disagreement.topic,
+                    metadata={"positions": disagreement.positions},
                 )
 
-            # Phase 3: Adaptive debate rounds
-            latest_responses = round1_responses
             round_num = 2
-
             while disagreements and round_num <= self.config.max_rounds:
                 yield DebateEvent(
                     type=EventType.DEBATE_ROUND_START,
                     round_number=round_num,
                 )
 
-                latest_responses = []
+                latest_responses: list[AgentResponse] = []
                 async for event in self._debate_round_streaming(
-                    prompt, all_responses[-1], disagreements, round_num
+                    prompt,
+                    all_responses[-1],
+                    disagreements,
+                    round_num,
                 ):
                     if isinstance(event, AgentResponse):
                         latest_responses.append(event)
@@ -113,10 +114,18 @@ class Orchestrator:
                 all_responses.append(latest_responses)
 
                 new_disagreements = await self._detect_disagreements(
-                    prompt, latest_responses, previous=disagreements
+                    prompt,
+                    latest_responses,
+                    previous=disagreements,
                 )
 
-                if self._converged(disagreements, new_disagreements):
+                round_state = self._classify_round(
+                    disagreements,
+                    new_disagreements,
+                    latest_responses,
+                )
+
+                if round_state == "consensus":
                     yield DebateEvent(
                         type=EventType.CONSENSUS_REACHED,
                         round_number=round_num,
@@ -124,19 +133,48 @@ class Orchestrator:
                     disagreements = new_disagreements
                     break
 
+                if round_state == "deadlock":
+                    disagreements = new_disagreements
+                    judge_resolution = await self._resolve_deadlock(
+                        prompt,
+                        all_responses,
+                        disagreements,
+                    )
+                    yield DebateEvent(
+                        type=EventType.DEADLOCK_RESOLVED,
+                        round_number=round_num,
+                        content=judge_resolution,
+                    )
+                    break
+
                 disagreements = new_disagreements
                 round_num += 1
 
-        # Phase 4: Synthesis
+            if disagreements and judge_resolution is None:
+                judge_resolution = await self._resolve_deadlock(
+                    prompt,
+                    all_responses,
+                    disagreements,
+                )
+                yield DebateEvent(
+                    type=EventType.DEADLOCK_RESOLVED,
+                    round_number=max(1, len(all_responses)),
+                    content=judge_resolution,
+                )
+
         yield DebateEvent(type=EventType.SYNTHESIS_START)
-        synthesis = await self._synthesize(prompt, all_responses, disagreements)
-        yield DebateEvent(
-            type=EventType.SYNTHESIS_COMPLETE,
-            content=synthesis,
+        synthesis = await self._synthesize(
+            prompt,
+            all_responses,
+            disagreements,
+            judge_resolution,
         )
+        yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
 
     async def _fan_out_streaming(
-        self, prompt: str, round_number: int
+        self,
+        prompt: str,
+        round_number: int,
     ) -> AsyncIterator[DebateEvent | AgentResponse]:
         """Run all agents in parallel, yielding chunk and completion events."""
         queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
@@ -188,19 +226,19 @@ class Orchestrator:
                     )
                 )
                 await queue.put(response)
-            except Exception as e:
+            except Exception as exc:
                 await queue.put(
                     DebateEvent(
                         type=EventType.ERROR,
                         agent_id=agent_id,
-                        content=str(e),
+                        content=str(exc),
                     )
                 )
             finally:
                 await queue.put(None)
 
-        for index, pc in agents:
-            asyncio.create_task(run_agent(index, pc))
+        for index, provider_config in agents:
+            asyncio.create_task(run_agent(index, provider_config))
 
         completed = 0
         while completed < total:
@@ -221,7 +259,7 @@ class Orchestrator:
         queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
         agents = list(enumerate(self.config.providers))
         total = len(agents)
-        response_by_id = {r.agent_id: r for r in prior_responses}
+        response_by_id = {response.agent_id: response for response in prior_responses}
 
         async def run_debate_agent(index: int, pc: ProviderConfig) -> None:
             provider = self._providers[pc.provider]
@@ -233,7 +271,11 @@ class Orchestrator:
             if own_prior is None:
                 full_prompt = build_round1_prompt(prompt, persona)
             else:
-                others = [r for r in prior_responses if r.agent_id != agent_id]
+                others = [
+                    response
+                    for response in prior_responses
+                    if response.agent_id != agent_id
+                ]
                 full_prompt = build_debate_prompt(
                     user_prompt=prompt,
                     persona=persona,
@@ -265,13 +307,16 @@ class Orchestrator:
                         )
                     )
 
+                raw_content = "".join(chunks)
+                content, position_updates = self._extract_position_updates(raw_content)
                 response = AgentResponse(
                     agent_id=agent_id,
                     provider=pc.provider,
                     model=pc.model,
                     round_number=round_number,
-                    content="".join(chunks),
+                    content=content,
                     persona=persona_name,
+                    position_updates=position_updates,
                 )
                 await queue.put(
                     DebateEvent(
@@ -281,19 +326,19 @@ class Orchestrator:
                     )
                 )
                 await queue.put(response)
-            except Exception as e:
+            except Exception as exc:
                 await queue.put(
                     DebateEvent(
                         type=EventType.ERROR,
                         agent_id=agent_id,
-                        content=str(e),
+                        content=str(exc),
                     )
                 )
             finally:
                 await queue.put(None)
 
-        for index, pc in agents:
-            asyncio.create_task(run_debate_agent(index, pc))
+        for index, provider_config in agents:
+            asyncio.create_task(run_debate_agent(index, provider_config))
 
         completed = 0
         while completed < total:
@@ -328,14 +373,31 @@ class Orchestrator:
         return self._parse_disagreements(raw)
 
     @staticmethod
+    def _extract_json_array(raw: str) -> str | None:
+        """Extract the first JSON array from a possibly wrapped response."""
+        fenced_match = re.search(
+            r"```json\s*(\[.*?\])\s*```",
+            raw,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if fenced_match:
+            return fenced_match.group(1)
+
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            return json_match.group()
+
+        return None
+
+    @staticmethod
     def _parse_disagreements(raw: str) -> list[Disagreement]:
         """Parse JSON disagreements from the orchestrator's response."""
-        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if not json_match:
+        json_blob = Orchestrator._extract_json_array(raw)
+        if json_blob is None:
             return []
 
         try:
-            data = json.loads(json_match.group())
+            data = json.loads(json_blob)
         except json.JSONDecodeError:
             return []
 
@@ -352,37 +414,154 @@ class Orchestrator:
         return disagreements
 
     @staticmethod
-    def _converged(
-        old: list[Disagreement], new: list[Disagreement]
-    ) -> bool:
-        """Check if disagreements have converged (resolved or deadlocked)."""
-        if not new:
-            return True
+    def _parse_position_updates(raw: str) -> list[PositionUpdate]:
+        """Parse structured position updates from agent output."""
+        json_blob = Orchestrator._extract_json_array(raw)
+        if json_blob is None:
+            return []
 
-        old_topics = {d.topic for d in old}
-        new_topics = {d.topic for d in new}
+        try:
+            data = json.loads(json_blob)
+        except json.JSONDecodeError:
+            return []
+
+        updates = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            topic = item.get("topic")
+            previous_position = item.get("previous_position")
+            next_position = item.get("next_position")
+            change_type = item.get("change_type")
+            if not all(
+                isinstance(value, str) and value
+                for value in [
+                    topic,
+                    previous_position,
+                    next_position,
+                    change_type,
+                ]
+            ):
+                continue
+            updates.append(
+                PositionUpdate(
+                    topic=topic,
+                    previous_position=previous_position,
+                    next_position=next_position,
+                    change_type=change_type,
+                    convincing_argument=str(item.get("convincing_argument", "")),
+                    confidence=str(item.get("confidence", "medium")),
+                    remaining_concern=str(item.get("remaining_concern", "")),
+                )
+            )
+        return updates
+
+    @classmethod
+    def _extract_position_updates(
+        cls,
+        raw_content: str,
+    ) -> tuple[str, list[PositionUpdate]]:
+        """Separate a debate response from its structured position updates."""
+        section_match = re.search(
+            r"\n### Structured Position Updates\s*\n\s*```json\s*(\[.*?\])\s*```",
+            raw_content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if section_match:
+            updates = cls._parse_position_updates(section_match.group(1))
+            if updates:
+                cleaned = (
+                    raw_content[: section_match.start()]
+                    + raw_content[section_match.end() :]
+                ).strip()
+                return cleaned, updates
+
+        return raw_content, cls._parse_position_updates(raw_content)
+
+    @staticmethod
+    def _positions_changed(
+        old: list[Disagreement],
+        new: list[Disagreement],
+    ) -> bool:
+        """Check whether the judge's summarized positions materially changed."""
+        old_positions = {
+            disagreement.topic: frozenset(disagreement.positions.items())
+            for disagreement in old
+        }
+        new_positions = {
+            disagreement.topic: frozenset(disagreement.positions.items())
+            for disagreement in new
+        }
+        return old_positions != new_positions
+
+    @classmethod
+    def _classify_round(
+        cls,
+        old: list[Disagreement],
+        new: list[Disagreement],
+        responses: list[AgentResponse],
+    ) -> str:
+        """Classify the debate state after a round."""
+        if not new:
+            return "consensus"
+
+        old_topics = {disagreement.topic for disagreement in old}
+        new_topics = {disagreement.topic for disagreement in new}
+
+        if len(new) < len(old):
+            return "progress"
+
+        if cls._positions_changed(old, new):
+            return "progress"
+
+        if any(response.has_position_shift for response in responses):
+            return "progress"
 
         if old_topics == new_topics:
-            old_positions = {
-                d.topic: frozenset(d.positions.values()) for d in old
-            }
-            new_positions = {
-                d.topic: frozenset(d.positions.values()) for d in new
-            }
-            if old_positions == new_positions:
-                return True
+            return "deadlock"
 
-        return len(new) < len(old)
+        return "progress"
+
+    async def _resolve_deadlock(
+        self,
+        prompt: str,
+        all_responses: list[list[AgentResponse]],
+        disagreements: list[Disagreement],
+    ) -> str:
+        """Use the judge model to resolve an unresolved debate deadlock."""
+        resolution_prompt = build_deadlock_resolution_prompt(
+            prompt,
+            all_responses,
+            disagreements,
+        )
+
+        result_chunks: list[str] = []
+        options = ClaudeAgentOptions(
+            model=self.config.orchestrator_model,
+            max_turns=1,
+        )
+
+        async for message in query(prompt=resolution_prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        result_chunks.append(block.text)
+
+        return "".join(result_chunks)
 
     async def _synthesize(
         self,
         prompt: str,
         all_responses: list[list[AgentResponse]],
         disagreements: list[Disagreement],
+        deadlock_resolution: str | None,
     ) -> str:
         """Produce the final synthesis using Claude."""
         synthesis_prompt = build_synthesis_prompt(
-            prompt, all_responses, disagreements
+            prompt,
+            all_responses,
+            disagreements,
+            deadlock_resolution,
         )
 
         result_chunks: list[str] = []
