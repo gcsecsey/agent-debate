@@ -1,0 +1,29 @@
+{
+  "name": "agent-debate-plugins",
+  "owner": {
+    "name": "Gergely Csecsey",
+    "url": "https://github.com/gcsecsey/agent-debate"
+  },
+  "metadata": {
+    "description": "Multi-agent debate system for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "debate",
+      "description": "Multi-agent debate: fan out prompts to multiple AI coding agents, let them debate disagreements, and synthesize a consensus recommendation",
+      "source": "./plugin/debate",
+      "version": "0.1.0",
+      "author": {
+        "name": "Gergely Csecsey",
+        "email": "gergely.csecsey@automattic.com"
+      },
+      "license": "GPL-2.0-only",
+      "strict": true,
+      "skills": [],
+      "commands": [
+        "./commands/run.md"
+      ]
+    }
+  ]
+}
