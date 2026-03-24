@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import AsyncIterator
 
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, TextBlock
 
 from .prompts import (
-    build_debate_prompt,
     build_deadlock_resolution_prompt,
+    build_debate_prompt,
     build_disagreement_prompt,
     build_round1_prompt,
     build_synthesis_prompt,
@@ -20,7 +21,6 @@ from .prompts import (
 )
 from .providers import get_provider
 from .providers.base import BaseProvider
-from .streaming import collect_responses, fan_out_streaming
 from .types import (
     AgentResponse,
     DebateConfig,
@@ -56,10 +56,8 @@ class Orchestrator:
     def _agent_id(self, index: int, pc: ProviderConfig) -> str:
         """Generate a unique agent ID, handling duplicates."""
         base = pc.agent_id
-        # Check if there are duplicates
         all_ids = [p.agent_id for p in self.config.providers]
         if all_ids.count(base) > 1:
-            # Find which occurrence this is
             occurrence = sum(
                 1
                 for i, p in enumerate(self.config.providers[:index])
@@ -72,59 +70,53 @@ class Orchestrator:
         """Run the full debate loop, yielding events as they occur."""
         judge_resolution: str | None = None
 
-        # Phase 1: Independent analysis (parallel fan-out)
         yield DebateEvent(type=EventType.ROUND_START, round_number=1)
-        round1_responses = await self._fan_out(prompt, round_number=1)
-        for r in round1_responses:
-            yield DebateEvent(
-                type=EventType.AGENT_COMPLETED,
-                agent_id=r.agent_id,
-                round_number=1,
-                content=r.content[:200] + "..." if len(r.content) > 200 else r.content,
-            )
 
-        # Phase 2: Detect disagreements
+        round1_responses: list[AgentResponse] = []
+        async for event in self._fan_out_streaming(prompt, round_number=1):
+            if isinstance(event, AgentResponse):
+                round1_responses.append(event)
+            else:
+                yield event
+
         disagreements = await self._detect_disagreements(prompt, round1_responses)
-
         all_responses = [round1_responses]
 
         if not disagreements:
             yield DebateEvent(type=EventType.CONSENSUS_REACHED, round_number=1)
         else:
-            for d in disagreements:
+            for disagreement in disagreements:
                 yield DebateEvent(
                     type=EventType.DISAGREEMENT_FOUND,
-                    content=d.topic,
-                    metadata={"positions": d.positions},
+                    content=disagreement.topic,
+                    metadata={"positions": disagreement.positions},
                 )
 
-            # Phase 3: Adaptive debate rounds
-            latest_responses = round1_responses
             round_num = 2
-
             while disagreements and round_num <= self.config.max_rounds:
                 yield DebateEvent(
                     type=EventType.DEBATE_ROUND_START,
                     round_number=round_num,
                 )
 
-                latest_responses = await self._debate_round(
-                    prompt, latest_responses, disagreements, round_num
-                )
+                latest_responses: list[AgentResponse] = []
+                async for event in self._debate_round_streaming(
+                    prompt,
+                    all_responses[-1],
+                    disagreements,
+                    round_num,
+                ):
+                    if isinstance(event, AgentResponse):
+                        latest_responses.append(event)
+                    else:
+                        yield event
+
                 all_responses.append(latest_responses)
 
-                for r in latest_responses:
-                    yield DebateEvent(
-                        type=EventType.AGENT_COMPLETED,
-                        agent_id=r.agent_id,
-                        round_number=round_num,
-                        content=r.content[:200] + "..."
-                        if len(r.content) > 200
-                        else r.content,
-                    )
-
                 new_disagreements = await self._detect_disagreements(
-                    prompt, latest_responses, previous=disagreements
+                    prompt,
+                    latest_responses,
+                    previous=disagreements,
                 )
 
                 round_state = self._classify_round(
@@ -170,7 +162,6 @@ class Orchestrator:
                     content=judge_resolution,
                 )
 
-        # Phase 4: Synthesis
         yield DebateEvent(type=EventType.SYNTHESIS_START)
         synthesis = await self._synthesize(
             prompt,
@@ -178,59 +169,99 @@ class Orchestrator:
             disagreements,
             judge_resolution,
         )
-        yield DebateEvent(
-            type=EventType.SYNTHESIS_COMPLETE,
-            content=synthesis,
-        )
+        yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
 
-    async def _fan_out(self, prompt: str, round_number: int) -> list[AgentResponse]:
-        """Run all agents in parallel for independent analysis."""
+    async def _fan_out_streaming(
+        self,
+        prompt: str,
+        round_number: int,
+    ) -> AsyncIterator[DebateEvent | AgentResponse]:
+        """Run all agents in parallel, yielding chunk and completion events."""
+        queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
+        agents = list(enumerate(self.config.providers))
+        total = len(agents)
 
-        async def run_agent(index: int, pc: ProviderConfig) -> AgentResponse:
+        async def run_agent(index: int, pc: ProviderConfig) -> None:
             provider = self._providers[pc.provider]
             agent_id = self._agent_id(index, pc)
             persona = get_persona(index, pc.persona)
             persona_name = get_persona_name(index)
             full_prompt = build_round1_prompt(prompt, persona)
 
-            chunks: list[str] = []
-            async for chunk in provider.analyze(
-                prompt=full_prompt,
-                system_prompt=persona,
-                cwd=self.config.cwd,
-                model=pc.model,
-            ):
-                chunks.append(chunk)
-
-            return AgentResponse(
-                agent_id=agent_id,
-                provider=pc.provider,
-                model=pc.model,
-                round_number=round_number,
-                content="".join(chunks),
-                persona=persona_name,
+            await queue.put(
+                DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
             )
 
-        coroutines = [run_agent(i, pc) for i, pc in enumerate(self.config.providers)]
+            try:
+                chunks: list[str] = []
+                async for chunk in provider.analyze(
+                    prompt=full_prompt,
+                    system_prompt=persona,
+                    cwd=self.config.cwd,
+                    model=pc.model,
+                ):
+                    chunks.append(chunk)
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.AGENT_CHUNK,
+                            agent_id=agent_id,
+                            round_number=round_number,
+                            content=chunk,
+                        )
+                    )
 
-        events: list = []
-        async for event in fan_out_streaming(coroutines):
-            events.append(event)
+                response = AgentResponse(
+                    agent_id=agent_id,
+                    provider=pc.provider,
+                    model=pc.model,
+                    round_number=round_number,
+                    content="".join(chunks),
+                    persona=persona_name,
+                )
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.AGENT_COMPLETED,
+                        agent_id=agent_id,
+                        round_number=round_number,
+                    )
+                )
+                await queue.put(response)
+            except Exception as exc:
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.ERROR,
+                        agent_id=agent_id,
+                        content=str(exc),
+                    )
+                )
+            finally:
+                await queue.put(None)
 
-        return collect_responses(events)
+        for index, provider_config in agents:
+            asyncio.create_task(run_agent(index, provider_config))
 
-    async def _debate_round(
+        completed = 0
+        while completed < total:
+            item = await queue.get()
+            if item is None:
+                completed += 1
+                continue
+            yield item
+
+    async def _debate_round_streaming(
         self,
         prompt: str,
         prior_responses: list[AgentResponse],
         disagreements: list[Disagreement],
         round_number: int,
-    ) -> list[AgentResponse]:
-        """Run a debate round where agents respond to each other."""
+    ) -> AsyncIterator[DebateEvent | AgentResponse]:
+        """Run a debate round, yielding chunk and completion events."""
+        queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
+        agents = list(enumerate(self.config.providers))
+        total = len(agents)
+        response_by_id = {response.agent_id: response for response in prior_responses}
 
-        response_by_id = {r.agent_id: r for r in prior_responses}
-
-        async def run_debate_agent(index: int, pc: ProviderConfig) -> AgentResponse:
+        async def run_debate_agent(index: int, pc: ProviderConfig) -> None:
             provider = self._providers[pc.provider]
             agent_id = self._agent_id(index, pc)
             persona = get_persona(index, pc.persona)
@@ -238,10 +269,13 @@ class Orchestrator:
 
             own_prior = response_by_id.get(agent_id)
             if own_prior is None:
-                # Fallback: agent wasn't in prior round, treat as new
                 full_prompt = build_round1_prompt(prompt, persona)
             else:
-                others = [r for r in prior_responses if r.agent_id != agent_id]
+                others = [
+                    response
+                    for response in prior_responses
+                    if response.agent_id != agent_id
+                ]
                 full_prompt = build_debate_prompt(
                     user_prompt=prompt,
                     persona=persona,
@@ -251,37 +285,68 @@ class Orchestrator:
                     round_number=round_number,
                 )
 
-            chunks: list[str] = []
-            async for chunk in provider.analyze(
-                prompt=full_prompt,
-                system_prompt=persona,
-                cwd=self.config.cwd,
-                model=pc.model,
-            ):
-                chunks.append(chunk)
-
-            raw_content = "".join(chunks)
-            content, position_updates = self._extract_position_updates(raw_content)
-
-            return AgentResponse(
-                agent_id=agent_id,
-                provider=pc.provider,
-                model=pc.model,
-                round_number=round_number,
-                content=content,
-                persona=persona_name,
-                position_updates=position_updates,
+            await queue.put(
+                DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
             )
 
-        coroutines = [
-            run_debate_agent(i, pc) for i, pc in enumerate(self.config.providers)
-        ]
+            try:
+                chunks: list[str] = []
+                async for chunk in provider.analyze(
+                    prompt=full_prompt,
+                    system_prompt=persona,
+                    cwd=self.config.cwd,
+                    model=pc.model,
+                ):
+                    chunks.append(chunk)
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.AGENT_CHUNK,
+                            agent_id=agent_id,
+                            round_number=round_number,
+                            content=chunk,
+                        )
+                    )
 
-        events: list = []
-        async for event in fan_out_streaming(coroutines):
-            events.append(event)
+                raw_content = "".join(chunks)
+                content, position_updates = self._extract_position_updates(raw_content)
+                response = AgentResponse(
+                    agent_id=agent_id,
+                    provider=pc.provider,
+                    model=pc.model,
+                    round_number=round_number,
+                    content=content,
+                    persona=persona_name,
+                    position_updates=position_updates,
+                )
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.AGENT_COMPLETED,
+                        agent_id=agent_id,
+                        round_number=round_number,
+                    )
+                )
+                await queue.put(response)
+            except Exception as exc:
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.ERROR,
+                        agent_id=agent_id,
+                        content=str(exc),
+                    )
+                )
+            finally:
+                await queue.put(None)
 
-        return collect_responses(events)
+        for index, provider_config in agents:
+            asyncio.create_task(run_debate_agent(index, provider_config))
+
+        completed = 0
+        while completed < total:
+            item = await queue.get()
+            if item is None:
+                completed += 1
+                continue
+            yield item
 
     async def _detect_disagreements(
         self,
@@ -308,6 +373,23 @@ class Orchestrator:
         return self._parse_disagreements(raw)
 
     @staticmethod
+    def _extract_json_array(raw: str) -> str | None:
+        """Extract the first JSON array from a possibly wrapped response."""
+        fenced_match = re.search(
+            r"```json\s*(\[.*?\])\s*```",
+            raw,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if fenced_match:
+            return fenced_match.group(1)
+
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            return json_match.group()
+
+        return None
+
+    @staticmethod
     def _parse_disagreements(raw: str) -> list[Disagreement]:
         """Parse JSON disagreements from the orchestrator's response."""
         json_blob = Orchestrator._extract_json_array(raw)
@@ -330,23 +412,6 @@ class Orchestrator:
                     )
                 )
         return disagreements
-
-    @staticmethod
-    def _extract_json_array(raw: str) -> str | None:
-        """Extract the first JSON array from a possibly wrapped response."""
-        fenced_match = re.search(
-            r"```json\s*(\[.*?\])\s*```",
-            raw,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if fenced_match:
-            return fenced_match.group(1)
-
-        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if json_match:
-            return json_match.group()
-
-        return None
 
     @staticmethod
     def _parse_position_updates(raw: str) -> list[PositionUpdate]:
@@ -440,8 +505,8 @@ class Orchestrator:
         if not new:
             return "consensus"
 
-        old_topics = {d.topic for d in old}
-        new_topics = {d.topic for d in new}
+        old_topics = {disagreement.topic for disagreement in old}
+        new_topics = {disagreement.topic for disagreement in new}
 
         if len(new) < len(old):
             return "progress"

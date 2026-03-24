@@ -4,69 +4,99 @@ from __future__ import annotations
 
 import anyio
 import click
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
 
 from .config import build_config
 from .orchestrator import Orchestrator
 from .providers import discover_available
-from .types import DebateEvent, EventType
+from .types import AgentResponse, EventType
 
 console = Console()
 
+AGENT_PREVIEW_LINES = 30
 
-def _format_event(event: DebateEvent) -> Panel | Text | None:
-    """Format a debate event for rich console output."""
-    match event.type:
-        case EventType.ROUND_START:
-            return Panel(
-                f"[bold]Round {event.round_number}: Independent Analysis[/bold]",
-                style="blue",
-            )
-        case EventType.AGENT_COMPLETED:
-            label = f"[bold green]{event.agent_id}[/bold green] (round {event.round_number})"
-            return Panel(event.content, title=label, border_style="green")
-        case EventType.DISAGREEMENT_FOUND:
-            positions = event.metadata.get("positions", {})
-            pos_text = "\n".join(f"  {k}: {v}" for k, v in positions.items())
-            return Panel(
-                f"[bold]{event.content}[/bold]\n{pos_text}",
-                title="[bold yellow]Disagreement[/bold yellow]",
-                border_style="yellow",
-            )
-        case EventType.DEBATE_ROUND_START:
-            return Panel(
-                f"[bold]Debate Round {event.round_number}[/bold]",
-                style="cyan",
-            )
-        case EventType.CONSENSUS_REACHED:
-            return Panel(
-                f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
-                style="green",
-            )
-        case EventType.DEADLOCK_RESOLVED:
-            return Panel(
-                Markdown(event.content),
-                title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
-                border_style="red",
-            )
-        case EventType.SYNTHESIS_START:
-            return Panel("[bold]Synthesizing results...[/bold]", style="magenta")
-        case EventType.SYNTHESIS_COMPLETE:
-            return Panel(
-                Markdown(event.content),
-                title="[bold magenta]Final Synthesis[/bold magenta]",
-                border_style="magenta",
-            )
-        case EventType.ERROR:
-            return Panel(
-                f"[bold red]{event.content}[/bold red]",
-                title="Error",
-                border_style="red",
-            )
-    return None
+
+class LiveDebateDisplay:
+    """Manages a Rich Live display with per-agent streaming panels."""
+
+    def __init__(self) -> None:
+        self._agent_buffers: dict[str, str] = {}
+        self._agent_status: dict[str, str] = {}
+        self._live: Live | None = None
+
+    def start(self) -> Live:
+        self._live = Live(
+            self._render(),
+            console=console,
+            refresh_per_second=4,
+            vertical_overflow="visible",
+        )
+        return self._live
+
+    def set_phase(self, text: str, style: str = "blue") -> None:
+        self._flush_static(Panel(f"[bold]{text}[/bold]", style=style))
+
+    def agent_started(self, agent_id: str) -> None:
+        self._agent_buffers[agent_id] = ""
+        self._agent_status[agent_id] = "streaming"
+        self._update()
+
+    def agent_chunk(self, agent_id: str, chunk: str) -> None:
+        if agent_id in self._agent_buffers:
+            self._agent_buffers[agent_id] += chunk
+            self._update()
+
+    def agent_completed(self, agent_id: str) -> None:
+        self._agent_status[agent_id] = "done"
+        self._update()
+
+    def clear_agents(self) -> None:
+        self._agent_buffers.clear()
+        self._agent_status.clear()
+        self._update()
+
+    def add_static(self, panel: Panel) -> None:
+        self._flush_static(panel)
+
+    def _flush_static(self, panel: Panel) -> None:
+        if self._live is not None:
+            self._live.console.print(panel)
+
+    def _render(self) -> Group:
+        renderables = []
+        for agent_id, buffer in self._agent_buffers.items():
+            status = self._agent_status.get(agent_id, "streaming")
+            lines = buffer.strip().split("\n")
+            total_lines = len(lines)
+
+            if status == "streaming":
+                border = "cyan"
+                suffix = f" [dim]streaming... ({total_lines} lines)[/dim]"
+            else:
+                border = "green"
+                suffix = f" [dim]({total_lines} lines)[/dim]"
+
+            if total_lines > AGENT_PREVIEW_LINES:
+                visible = (
+                    lines[:15]
+                    + [f"\n  [dim]... {total_lines - 25} lines hidden ...[/dim]\n"]
+                    + lines[-10:]
+                )
+                display_text = "\n".join(visible)
+            else:
+                display_text = buffer.strip()
+
+            title = f"[bold]{agent_id}[/bold]{suffix}"
+            renderables.append(Panel(display_text, title=title, border_style=border))
+
+        return Group(*renderables)
+
+    def _update(self) -> None:
+        if self._live is not None:
+            self._live.update(self._render())
 
 
 async def _run(
@@ -95,11 +125,80 @@ async def _run(
     )
 
     orchestrator = Orchestrator(config)
+    display = LiveDebateDisplay()
 
-    async for event in orchestrator.run(prompt):
-        rendered = _format_event(event)
-        if rendered is not None:
-            console.print(rendered)
+    with display.start():
+        async for event in orchestrator.run(prompt):
+            if isinstance(event, AgentResponse):
+                continue
+
+            match event.type:
+                case EventType.ROUND_START:
+                    display.set_phase(
+                        f"Round {event.round_number}: Independent Analysis",
+                        style="blue",
+                    )
+                case EventType.AGENT_STARTED:
+                    display.agent_started(event.agent_id or "unknown")
+                case EventType.AGENT_CHUNK:
+                    display.agent_chunk(event.agent_id or "unknown", event.content)
+                case EventType.AGENT_COMPLETED:
+                    display.agent_completed(event.agent_id or "unknown")
+                case EventType.DISAGREEMENT_FOUND:
+                    positions = event.metadata.get("positions", {})
+                    pos_text = "\n".join(
+                        f"  {key}: {value}" for key, value in positions.items()
+                    )
+                    display.add_static(
+                        Panel(
+                            f"[bold]{event.content}[/bold]\n{pos_text}",
+                            title="[bold yellow]Disagreement[/bold yellow]",
+                            border_style="yellow",
+                        )
+                    )
+                case EventType.DEBATE_ROUND_START:
+                    display.clear_agents()
+                    display.set_phase(
+                        f"Debate Round {event.round_number}",
+                        style="cyan",
+                    )
+                case EventType.CONSENSUS_REACHED:
+                    display.add_static(
+                        Panel(
+                            f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
+                            style="green",
+                        )
+                    )
+                case EventType.DEADLOCK_RESOLVED:
+                    display.clear_agents()
+                    display.add_static(
+                        Panel(
+                            Markdown(event.content),
+                            title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
+                            border_style="red",
+                        )
+                    )
+                case EventType.SYNTHESIS_START:
+                    display.clear_agents()
+                    display.add_static(
+                        Panel("[bold]Synthesizing results...[/bold]", style="magenta")
+                    )
+                case EventType.SYNTHESIS_COMPLETE:
+                    display.add_static(
+                        Panel(
+                            Markdown(event.content),
+                            title="[bold magenta]Final Synthesis[/bold magenta]",
+                            border_style="magenta",
+                        )
+                    )
+                case EventType.ERROR:
+                    display.add_static(
+                        Panel(
+                            f"[bold red]{event.content}[/bold red]",
+                            title=f"Error ({event.agent_id or 'unknown'})",
+                            border_style="red",
+                        )
+                    )
 
 
 @click.group()
