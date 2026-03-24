@@ -104,13 +104,19 @@ The plugin provides a `/debate:run` slash command that works inside Claude Code 
 
 #### Install the plugin
 
-```bash
-# For testing (single session):
-claude --plugin-dir ~/projects/agent-debate/plugin/debate
+In any Claude Code session, run:
 
-# For the Automattic marketplace, copy plugin/debate/ into your
-# local clone of claude-code-plugins and add the entry from
-# plugin/marketplace-entry.json to .claude-plugin/marketplace.json
+```
+/plugin marketplace add github:gcsecsey/agent-debate
+/plugin install debate
+```
+
+The `/debate:run` command will be available in all future sessions.
+
+For local development/testing (single session only):
+
+```bash
+claude --plugin-dir ~/projects/agent-debate/plugin/debate
 ```
 
 #### Use the plugin
