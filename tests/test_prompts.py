@@ -2,13 +2,14 @@
 
 from agent_debate.prompts import (
     build_debate_prompt,
+    build_deadlock_resolution_prompt,
     build_disagreement_prompt,
     build_round1_prompt,
     build_synthesis_prompt,
     get_persona,
     get_persona_name,
 )
-from agent_debate.types import AgentResponse, Disagreement
+from agent_debate.types import AgentResponse, Disagreement, PositionUpdate
 
 
 class TestPersonas:
@@ -68,25 +69,66 @@ class TestDebatePrompt:
             questions=["What scale are we targeting?"],
         )
         result = build_debate_prompt(
-            "Review auth", "You are an architect.",
-            own, [other], [disagreement], round_number=2,
+            "Review auth",
+            "You are an architect.",
+            own,
+            [other],
+            [disagreement],
+            round_number=2,
         )
         assert "My analysis here" in result
         assert "Other analysis" in result
         assert "JWT vs Sessions" in result
         assert "What scale are we targeting?" in result
+        assert "strong self-advocate" in result
+        assert "Structured Position Updates" in result
+        assert '"previous_position"' in result
 
 
 class TestDisagreementPrompt:
     def test_contains_all_responses(self):
         responses = [
-            AgentResponse("a1", "claude", "opus", 1, "Analysis 1", "Architect"),
+            AgentResponse(
+                "a1",
+                "claude",
+                "opus",
+                1,
+                "Analysis 1",
+                "Architect",
+                [
+                    PositionUpdate(
+                        topic="JWT vs Sessions",
+                        previous_position="Use JWT",
+                        next_position="Use JWT",
+                        change_type="maintain",
+                        convincing_argument="Scale still matters most",
+                    )
+                ],
+            ),
             AgentResponse("a2", "claude", "sonnet", 1, "Analysis 2", "Pragmatist"),
         ]
         result = build_disagreement_prompt("Review auth", responses)
         assert "Analysis 1" in result
         assert "Analysis 2" in result
         assert "JSON" in result  # asks for JSON output
+        assert "Structured Position Updates" in result
+        assert "Use JWT" in result
+
+
+class TestDeadlockResolutionPrompt:
+    def test_contains_history_and_disagreements(self):
+        round1 = [
+            AgentResponse("a1", "claude", "opus", 1, "Round 1 content", "Architect"),
+        ]
+        disagreements = [
+            Disagreement("JWT vs Sessions", {"a1": "JWT", "a2": "Sessions"})
+        ]
+        result = build_deadlock_resolution_prompt(
+            "Review auth", [round1], disagreements
+        )
+        assert "Round 1 content" in result
+        assert "JWT vs Sessions" in result
+        assert "Resolve the deadlock now" in result
 
 
 class TestSynthesisPrompt:
@@ -98,3 +140,16 @@ class TestSynthesisPrompt:
         assert "Round 1 content" in result
         assert "Consensus" in result
         assert "Recommendation" in result
+
+    def test_contains_judge_resolution(self):
+        round1 = [
+            AgentResponse("a1", "claude", "opus", 1, "Round 1 content", "Architect"),
+        ]
+        result = build_synthesis_prompt(
+            "Review auth",
+            [round1],
+            [Disagreement("JWT vs Sessions", {"a1": "JWT", "a2": "Sessions"})],
+            "Judge says prefer sessions.",
+        )
+        assert "Judge Deadlock Resolution" in result
+        assert "Judge says prefer sessions." in result

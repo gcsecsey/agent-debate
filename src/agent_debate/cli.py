@@ -46,6 +46,12 @@ def _format_event(event: DebateEvent) -> Panel | Text | None:
                 f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
                 style="green",
             )
+        case EventType.DEADLOCK_RESOLVED:
+            return Panel(
+                Markdown(event.content),
+                title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
+                border_style="red",
+            )
         case EventType.SYNTHESIS_START:
             return Panel("[bold]Synthesizing results...[/bold]", style="magenta")
         case EventType.SYNTHESIS_COMPLETE:
@@ -150,9 +156,7 @@ def run(
 
         agent-debate run -r 2 -d ./my-project "Plan the database migration"
     """
-    anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model
-    )
+    anyio.run(_run, prompt, providers, max_rounds, cwd, orchestrator_model)
 
 
 @main.command()

@@ -16,6 +16,7 @@ class EventType(Enum):
     DISAGREEMENT_FOUND = "disagreement_found"
     DEBATE_ROUND_START = "debate_round_start"
     CONSENSUS_REACHED = "consensus_reached"
+    DEADLOCK_RESOLVED = "deadlock_resolved"
     SYNTHESIS_START = "synthesis_start"
     SYNTHESIS_COMPLETE = "synthesis_complete"
     ERROR = "error"
@@ -48,6 +49,19 @@ class ProviderConfig:
 
 
 @dataclass
+class PositionUpdate:
+    """A structured record of how an agent's position changed."""
+
+    topic: str
+    previous_position: str
+    next_position: str
+    change_type: str
+    convincing_argument: str = ""
+    confidence: str = "medium"
+    remaining_concern: str = ""
+
+
+@dataclass
 class AgentResponse:
     """A single agent's response in a debate round."""
 
@@ -57,6 +71,16 @@ class AgentResponse:
     round_number: int
     content: str
     persona: str = ""
+    position_updates: list[PositionUpdate] = field(default_factory=list)
+
+    @property
+    def has_position_shift(self) -> bool:
+        """Whether this response reports a meaningful position change."""
+        return any(
+            update.change_type.lower() != "maintain"
+            or update.previous_position.strip() != update.next_position.strip()
+            for update in self.position_updates
+        )
 
 
 @dataclass
