@@ -195,21 +195,27 @@ class Orchestrator:
 
             try:
                 chunks: list[str] = []
-                async for chunk in provider.analyze(
-                    prompt=full_prompt,
-                    system_prompt="",
-                    cwd=self.config.cwd,
-                    model=pc.model,
-                ):
-                    chunks.append(chunk)
-                    await queue.put(
-                        DebateEvent(
-                            type=EventType.AGENT_CHUNK,
-                            agent_id=agent_id,
-                            round_number=round_number,
-                            content=chunk,
+
+                async def _stream() -> None:
+                    async for chunk in provider.analyze(
+                        prompt=full_prompt,
+                        system_prompt="",
+                        cwd=self.config.cwd,
+                        model=pc.model,
+                    ):
+                        chunks.append(chunk)
+                        await queue.put(
+                            DebateEvent(
+                                type=EventType.AGENT_CHUNK,
+                                agent_id=agent_id,
+                                round_number=round_number,
+                                content=chunk,
+                            )
                         )
-                    )
+
+                await asyncio.wait_for(
+                    _stream(), timeout=self.config.agent_timeout
+                )
 
                 content = "".join(chunks)
                 response = AgentResponse(
@@ -235,6 +241,14 @@ class Orchestrator:
                     )
                 )
                 await queue.put(response)
+            except asyncio.TimeoutError:
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.ERROR,
+                        agent_id=agent_id,
+                        content=f"Agent timed out after {self.config.agent_timeout}s",
+                    )
+                )
             except Exception as exc:
                 await queue.put(
                     DebateEvent(
@@ -294,21 +308,27 @@ class Orchestrator:
 
             try:
                 chunks: list[str] = []
-                async for chunk in provider.analyze(
-                    prompt=full_prompt,
-                    system_prompt="",
-                    cwd=self.config.cwd,
-                    model=pc.model,
-                ):
-                    chunks.append(chunk)
-                    await queue.put(
-                        DebateEvent(
-                            type=EventType.AGENT_CHUNK,
-                            agent_id=agent_id,
-                            round_number=2,
-                            content=chunk,
+
+                async def _stream() -> None:
+                    async for chunk in provider.analyze(
+                        prompt=full_prompt,
+                        system_prompt="",
+                        cwd=self.config.cwd,
+                        model=pc.model,
+                    ):
+                        chunks.append(chunk)
+                        await queue.put(
+                            DebateEvent(
+                                type=EventType.AGENT_CHUNK,
+                                agent_id=agent_id,
+                                round_number=2,
+                                content=chunk,
+                            )
                         )
-                    )
+
+                await asyncio.wait_for(
+                    _stream(), timeout=self.config.agent_timeout
+                )
 
                 content = "".join(chunks)
                 response = AgentResponse(
@@ -334,6 +354,14 @@ class Orchestrator:
                     )
                 )
                 await queue.put(response)
+            except asyncio.TimeoutError:
+                await queue.put(
+                    DebateEvent(
+                        type=EventType.ERROR,
+                        agent_id=agent_id,
+                        content=f"Agent timed out after {self.config.agent_timeout}s",
+                    )
+                )
             except Exception as exc:
                 await queue.put(
                     DebateEvent(

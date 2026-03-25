@@ -55,6 +55,7 @@ def build_config(
     cwd: str = ".",
     orchestrator_model: str = "sonnet",
     report_dir: str | None = ".context/debate",
+    agent_timeout: int = 300,
 ) -> DebateConfig:
     """Build a DebateConfig from CLI-style arguments."""
     return DebateConfig(
@@ -63,4 +64,5 @@ def build_config(
         cwd=cwd,
         orchestrator_model=orchestrator_model,
         report_dir=report_dir,
+        agent_timeout=agent_timeout,
     )

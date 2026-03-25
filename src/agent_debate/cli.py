@@ -106,6 +106,7 @@ async def _run(
     cwd: str,
     orchestrator_model: str,
     report_dir: str | None,
+    agent_timeout: int = 300,
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -114,6 +115,7 @@ async def _run(
         cwd=cwd,
         orchestrator_model=orchestrator_model,
         report_dir=report_dir,
+        agent_timeout=agent_timeout,
     )
 
     console.print(
@@ -236,6 +238,13 @@ def main() -> None:
     help="Model for the orchestrator (deduplication, synthesis)",
 )
 @click.option(
+    "--timeout",
+    "-t",
+    default=300,
+    type=int,
+    help="Timeout per agent call in seconds (default: 300)",
+)
+@click.option(
     "--no-report",
     is_flag=True,
     default=False,
@@ -247,6 +256,7 @@ def run(
     max_rounds: int,
     cwd: str,
     orchestrator_model: str,
+    timeout: int,
     no_report: bool,
 ) -> None:
     """Run a multi-perspective analysis.
@@ -265,7 +275,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout
     )
 
 
