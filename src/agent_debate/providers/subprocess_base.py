@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -63,6 +64,12 @@ class SubprocessProvider(BaseProvider):
             f.write(full_prompt)
             prompt_file = f.name
 
+        # Use a pty for stdout so the child process sees a TTY and uses
+        # line-buffering instead of full-buffering (~4-8KB blocks).
+        # Without this, CLI tools like gemini/codex buffer all output
+        # until exit, preventing real-time streaming.
+        controller_fd, worker_fd = os.openpty()
+
         try:
             args = self.build_args(full_prompt, prompt_file, system_prompt, model)
 
@@ -70,23 +77,43 @@ class SubprocessProvider(BaseProvider):
                 self.command,
                 *args,
                 stdin=asyncio.subprocess.PIPE if self.uses_stdin else None,
-                stdout=asyncio.subprocess.PIPE,
+                stdout=worker_fd,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
             )
+
+            # Parent doesn't need the worker end of the pty
+            os.close(worker_fd)
+            worker_fd = -1
 
             if self.uses_stdin:
                 assert proc.stdin is not None
                 proc.stdin.write(full_prompt.encode())
                 proc.stdin.write_eof()
 
-            assert proc.stdout is not None
+            # Wrap the pty controller fd in an async reader
+            loop = asyncio.get_event_loop()
+            reader = asyncio.StreamReader()
+            transport, _ = await loop.connect_read_pipe(
+                lambda: asyncio.StreamReaderProtocol(reader),
+                os.fdopen(controller_fd, "rb", 0),
+            )
+            controller_fd = -1  # Now owned by the fdopen file object
 
-            # Stream stdout line by line
-            async for line in proc.stdout:
-                decoded = line.decode("utf-8", errors="replace")
-                if decoded.strip():
-                    yield decoded
+            try:
+                while True:
+                    chunk = await reader.read(4096)
+                    if not chunk:
+                        break
+                    decoded = chunk.decode("utf-8", errors="replace")
+                    if decoded.strip():
+                        yield decoded
+            except OSError:
+                # EIO is expected when the child process exits and the
+                # worker side of the pty closes.
+                pass
+            finally:
+                transport.close()
 
             await proc.wait()
 
@@ -97,6 +124,10 @@ class SubprocessProvider(BaseProvider):
                 if error_msg:
                     yield f"\n\n[Error from {self.id}: {error_msg}]"
         finally:
+            if worker_fd >= 0:
+                os.close(worker_fd)
+            if controller_fd >= 0:
+                os.close(controller_fd)
             Path(prompt_file).unlink(missing_ok=True)
 
     def available(self) -> bool:
