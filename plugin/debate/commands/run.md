@@ -39,6 +39,15 @@ command -v agent-debate && agent-debate discover
 
 Run the debate via the Python package. This supports multi-provider debates (Claude, Codex, Gemini, Amp).
 
+For the checkpoint flow, use two steps:
+
+```bash
+# Phase 1: Opening arguments only
+agent-debate run "<prompt>" --providers "<providers>" --opening-only --cwd "$(pwd)"
+```
+
+Present the output to the user and ask if they want to proceed with the debate. If yes, run the full debate:
+
 ```bash
 agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
 ```
@@ -101,6 +110,25 @@ You are a reliability and security engineer. Focus on edge cases, failure modes,
 ```
 
 Wait for all 3 agents to complete and collect their responses.
+
+#### Phase 2.5: Opening Arguments Checkpoint
+
+Present the opening arguments to the user:
+
+```
+## Opening Arguments
+
+**Architect:** [brief summary of their position]
+**Pragmatist:** [brief summary of their position]
+**Reliability Engineer:** [brief summary of their position]
+```
+
+Then ask the user:
+
+> "Here are the opening arguments from all three agents. Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these responses sufficient?"
+
+**If the user wants to proceed**, continue to Phase 3.
+**If the user is satisfied**, skip to Phase 5 (Synthesis) using only the opening arguments.
 
 #### Phase 3: Disagreement Detection
 
