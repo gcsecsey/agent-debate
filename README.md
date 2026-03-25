@@ -211,8 +211,6 @@ debate_run (trace)
 ├── targeted_debate (span, if disagreements exist)
 │   ├── claude:opus (generation)
 │   └── ...
-├── re_dedup (span, if debate occurred)
-│   └── dedup_call (generation)
 └── synthesis (span)
     └── synthesis_call (generation)
 ```

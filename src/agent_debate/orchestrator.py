@@ -140,16 +140,6 @@ class Orchestrator:
                             self._report.save_debate_response(event)
                     else:
                         yield event
-
-                # Re-deduplicate with debate responses included
-                re_dedup_span = tracing.start_span(trace, "re_dedup")
-                all_responses = responses + debate_responses
-                findings, stark_disagreements, dedup_raw = (
-                    await self._deduplicate_findings(
-                        prompt, all_responses, span=re_dedup_span
-                    )
-                )
-                tracing.end_span(re_dedup_span)
                 tracing.end_span(debate_span)
 
             # Phase 4: Synthesis
