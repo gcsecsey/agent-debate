@@ -26,6 +26,11 @@ def load_fixture(name: str) -> str:
     return (FIXTURES / name).read_text()
 
 
+class TestEventTypes:
+    def test_opening_complete_exists(self):
+        assert EventType.OPENING_COMPLETE.value == "opening_complete"
+
+
 class FakeProvider:
     """A mock provider that returns predetermined responses."""
 
