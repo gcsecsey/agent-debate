@@ -21,6 +21,10 @@ dev = [
     "pytest>=8.0",
     "pytest-anyio>=0.0.0",
 ]
+tracing = [
+    "langfuse>=2.0",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 agent-debate = "agent_debate.cli:main"
