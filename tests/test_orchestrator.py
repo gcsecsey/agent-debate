@@ -319,3 +319,54 @@ class TestRunOpening:
         opening_event = [e for e in events if e.type == EventType.OPENING_COMPLETE][0]
         responses = opening_event.metadata["responses"]
         assert len(responses) == 1
+
+
+class TestRunDebate:
+    @pytest.mark.anyio
+    async def test_runs_synthesis_with_opening_responses(self):
+        """run_debate() should detect disagreements and synthesize."""
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+        fake = FakeProvider(["Debate response"])
+        orchestrator._providers = {"claude": fake}
+
+        opening_responses = [
+            AgentResponse("claude:agent0", "claude", "agent0", 1, "Use REST", "Architect"),
+            AgentResponse("claude:agent1", "claude", "agent1", 1, "Use gRPC", "Pragmatist"),
+        ]
+
+        # Mock the Claude Agent SDK calls used by disagreement detection and synthesis
+        mock_query_result = AsyncMock()
+        mock_query_result.__aiter__ = lambda self: self
+        mock_query_result.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+
+        with patch("agent_debate.orchestrator.query", return_value=mock_query_result):
+            events = []
+            async for event in orchestrator.run_debate("test prompt", opening_responses):
+                events.append(event)
+
+        event_types = [e.type for e in events]
+        # Should always end with synthesis
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+    @pytest.mark.anyio
+    async def test_empty_responses_skips_to_synthesis(self):
+        """With no opening responses, run_debate() should skip debate and synthesize."""
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+
+        mock_query_result = AsyncMock()
+        mock_query_result.__aiter__ = lambda self: self
+        mock_query_result.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+
+        with patch("agent_debate.orchestrator.query", return_value=mock_query_result):
+            events = []
+            async for event in orchestrator.run_debate("test", []):
+                events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.DEBATE_ROUND_START not in event_types
