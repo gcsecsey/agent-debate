@@ -192,7 +192,7 @@ class SlowProvider:
 
 
 class TestProviderTimeout:
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_slow_provider_times_out(self):
         config = DebateConfig(
             providers=[
@@ -316,3 +316,120 @@ class TestProviderTimeout:
             and "timed out" in e.content
         ]
         assert len(error_events) == 1, "Slow agent should time out"
+
+
+VALID_DEDUP_JSON = json.dumps(
+    {
+        "findings": [
+            {
+                "topic": "Use connection pooling",
+                "description": "Agents agree on pooling",
+                "agents": ["a1", "a2"],
+                "severity": "important",
+            }
+        ],
+        "stark_disagreements": [],
+    }
+)
+
+
+def _make_orchestrator() -> Orchestrator:
+    """Create an Orchestrator without calling __init__ (skips provider checks)."""
+    config = make_config(num_agents=2)
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.config = config
+    orch._providers = {}
+    orch._report = None
+    return orch
+
+
+class TestCallOrchestrator:
+    @pytest.mark.anyio
+    async def test_returns_text_and_usage(self):
+        from claude_agent_sdk.types import AssistantMessage, TextBlock
+
+        msg = AssistantMessage(content=[TextBlock(text="hello world")], model="test")
+
+        async def fake_query(**kwargs):
+            yield msg
+
+        orch = _make_orchestrator()
+        with patch("agent_debate.orchestrator.query", side_effect=fake_query):
+            text, usage = await orch._call_orchestrator("test prompt")
+            assert text == "hello world"
+
+
+class TestDedupRetry:
+    @pytest.mark.anyio
+    async def test_retry_on_empty_findings(self):
+        """First call returns garbage, second returns valid JSON — findings come from retry."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(
+                agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"
+            ),
+        ]
+
+        call_count = 0
+
+        async def fake_call_orchestrator(prompt, model=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "not json at all", None
+            return VALID_DEDUP_JSON, None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        findings, disagreements, raw = await orch._deduplicate_findings(
+            "test", responses
+        )
+        assert call_count == 2
+        assert len(findings) == 1
+        assert findings[0].topic == "Use connection pooling"
+
+    @pytest.mark.anyio
+    async def test_double_failure_returns_empty(self):
+        """Both calls return invalid JSON — returns empty, no crash."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(
+                agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"
+            ),
+        ]
+
+        async def fake_call_orchestrator(prompt, model=None):
+            return "garbage", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        findings, disagreements, raw = await orch._deduplicate_findings(
+            "test", responses
+        )
+        assert findings == []
+        assert disagreements == []
+
+    @pytest.mark.anyio
+    async def test_no_retry_when_findings_present(self):
+        """If first call succeeds, no retry happens."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(
+                agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"
+            ),
+        ]
+
+        call_count = 0
+
+        async def fake_call_orchestrator(prompt, model=None):
+            nonlocal call_count
+            call_count += 1
+            return VALID_DEDUP_JSON, None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        findings, disagreements, raw = await orch._deduplicate_findings(
+            "test", responses
+        )
+        assert call_count == 1
+        assert len(findings) == 1
