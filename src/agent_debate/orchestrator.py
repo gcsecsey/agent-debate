@@ -281,11 +281,10 @@ class Orchestrator:
 
             # Build a combined prompt addressing all disagreements
             others = [r for r in prior_responses if r.agent_id != agent_id]
-            # Use the first disagreement as primary (most cases have 1-2)
             full_prompt = build_targeted_debate_prompt(
                 user_prompt=prompt,
                 own_response=own_prior,
-                disagreement=disagreements[0],
+                disagreements=disagreements,
                 other_responses=others,
             )
 

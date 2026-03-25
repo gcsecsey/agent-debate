@@ -138,13 +138,13 @@ class TestTargetedDebatePrompt:
         result = build_targeted_debate_prompt(
             "Review auth",
             own,
-            disagreement,
+            [disagreement],
             [other],
         )
         # Position summary is used, not full response content
         assert "JWT" in result
         assert "JWT vs Sessions" in result
-        assert "Your Previous Position" in result
+        assert "Your Previous Positions" in result
         assert "My full analysis here" not in result
 
     def test_asks_for_strongest_case(self):
@@ -156,7 +156,7 @@ class TestTargetedDebatePrompt:
         result = build_targeted_debate_prompt(
             "Design API",
             own,
-            disagreement,
+            [disagreement],
             [],
         )
         assert "strongest case" in result
@@ -170,7 +170,7 @@ class TestTargetedDebatePrompt:
         result = build_targeted_debate_prompt(
             "Design API",
             own,
-            disagreement,
+            [disagreement],
             [],
         )
         assert "position_updates" not in result.lower()
@@ -183,9 +183,43 @@ class TestTargetedDebatePrompt:
             positions={"claude:opus": "Pos A"},
         )
         long_prompt = "y" * 300
-        result = build_targeted_debate_prompt(long_prompt, own, disagreement, [])
+        result = build_targeted_debate_prompt(long_prompt, own, [disagreement], [])
         assert "y" * 200 + "..." in result
         assert "y" * 300 not in result
+
+    def test_multiple_disagreements(self):
+        own = self._make_response("claude:opus", "My analysis")
+        other = self._make_response("claude:sonnet", "Other analysis")
+        d1 = Disagreement(
+            topic="JWT vs Sessions",
+            positions={"claude:opus": "JWT", "claude:sonnet": "Sessions"},
+        )
+        d2 = Disagreement(
+            topic="REST vs gRPC",
+            positions={"claude:opus": "REST", "claude:sonnet": "gRPC"},
+        )
+        d3 = Disagreement(
+            topic="SQL vs NoSQL",
+            positions={"claude:opus": "SQL", "claude:sonnet": "NoSQL"},
+        )
+        result = build_targeted_debate_prompt(
+            "Design system",
+            own,
+            [d1, d2, d3],
+            [other],
+        )
+        # All topics appear
+        assert "JWT vs Sessions" in result
+        assert "REST vs gRPC" in result
+        assert "SQL vs NoSQL" in result
+        # Numbered list
+        assert "### 1." in result
+        assert "### 2." in result
+        assert "### 3." in result
+        # Own positions listed
+        assert "**JWT vs Sessions**: JWT" in result
+        assert "**REST vs gRPC**: REST" in result
+        assert "**SQL vs NoSQL**: SQL" in result
 
 
 class TestSynthesisPrompt:
