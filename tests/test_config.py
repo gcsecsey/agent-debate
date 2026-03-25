@@ -101,6 +101,14 @@ class TestBuildConfig:
         assert len(config.providers) == 3
         assert config.providers[0].model == "sonnet"
 
+    def test_agent_timeout(self):
+        config = build_config(agent_timeout=60)
+        assert config.agent_timeout == 60
+
+    def test_agent_timeout_default(self):
+        config = build_config()
+        assert config.agent_timeout == 300
+
 
 class TestModelGroups:
     def test_groups_defined(self):

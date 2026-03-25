@@ -126,6 +126,9 @@ class SubprocessProvider(BaseProvider):
                     + (f": {error_msg}" if error_msg else "")
                 )
         finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
             if worker_fd >= 0:
                 os.close(worker_fd)
             if controller_fd >= 0:

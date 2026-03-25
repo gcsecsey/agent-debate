@@ -83,3 +83,4 @@ class DebateConfig:
     cwd: str = "."
     orchestrator_model: str = "sonnet"
     report_dir: str | None = ".context/debate"
+    agent_timeout: int = 300  # seconds, per provider call
