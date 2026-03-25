@@ -182,20 +182,20 @@ def build_dedup_prompt(
 # --- Targeted debate (only when stark disagreements exist) ---
 
 TARGETED_DEBATE_TEMPLATE = """\
-You are responding to a specific contradiction identified between your analysis \
-and another agent's analysis.
+You are responding to contradictions identified between your analysis \
+and other agents' analyses.
 
 ## Original Request (summary)
 
 {prompt_summary}
 
-## Your Previous Position
+## Your Previous Positions
 
-{own_position}
+{own_positions}
 
-## The Contradiction
+## Contradictions to Address
 
-{disagreement}
+{disagreements}
 
 ## Other Agents' Positions
 
@@ -203,9 +203,10 @@ and another agent's analysis.
 
 ## Instructions
 
-Make your strongest case for your position in 2-3 paragraphs. Be specific and \
-reference concrete implementation details. If, after seeing the other positions, \
-you believe your original position was wrong, say so directly and explain why.
+Address each contradiction in turn. For each, make your strongest case in 1-2 \
+paragraphs. Be specific and reference concrete implementation details. If, after \
+seeing the other positions, you believe your original position was wrong, say so \
+directly and explain why.
 
 Do NOT hedge or seek artificial compromise — give your honest technical judgment.
 """
@@ -214,25 +215,38 @@ Do NOT hedge or seek artificial compromise — give your honest technical judgme
 def build_targeted_debate_prompt(
     user_prompt: str,
     own_response: AgentResponse,
-    disagreement: Disagreement,
+    disagreements: list[Disagreement],
     other_responses: list[AgentResponse],
 ) -> str:
     """Build the prompt for a targeted debate round."""
-    positions_text = "\n".join(
-        f"- {aid}: {pos}" for aid, pos in disagreement.positions.items()
-        if aid != own_response.agent_id
+    agent_id = own_response.agent_id
+
+    own_positions = "\n".join(
+        f"- **{d.topic}**: {d.positions.get(agent_id, '(no position)')}"
+        for d in disagreements
     )
 
-    own_position = disagreement.positions.get(own_response.agent_id, "")
+    disagreements_text = "\n\n".join(
+        f"### {i + 1}. {d.topic}\n"
+        + "\n".join(f"- {aid}: {pos}" for aid, pos in d.positions.items())
+        for i, d in enumerate(disagreements)
+    )
+
+    other_positions = "\n\n".join(
+        f"**{d.topic}:**\n"
+        + "\n".join(
+            f"- {aid}: {pos}"
+            for aid, pos in d.positions.items()
+            if aid != agent_id
+        )
+        for d in disagreements
+    )
 
     return TARGETED_DEBATE_TEMPLATE.format(
         prompt_summary=_summarize_prompt(user_prompt),
-        own_position=own_position,
-        disagreement=f"**{disagreement.topic}**\n"
-        + "\n".join(
-            f"- {aid}: {pos}" for aid, pos in disagreement.positions.items()
-        ),
-        other_positions=positions_text,
+        own_positions=own_positions,
+        disagreements=disagreements_text,
+        other_positions=other_positions,
     )
 
 
