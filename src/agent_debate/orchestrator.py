@@ -113,6 +113,13 @@ class Orchestrator:
             )
             tracing.end_span(dedup_span)
 
+            if not findings and not stark_disagreements:
+                yield DebateEvent(
+                    type=EventType.ERROR,
+                    content="Dedup produced no findings — synthesis will work from raw agent responses",
+                    metadata={"phase": "dedup"},
+                )
+
             if self._report:
                 self._report.save_dedup(dedup_raw, findings, stark_disagreements)
 
@@ -374,26 +381,20 @@ class Orchestrator:
                 continue
             yield item
 
-    async def _deduplicate_findings(
+    async def _call_orchestrator(
         self,
         prompt: str,
-        responses: list[AgentResponse],
-        span: Any = None,
-    ) -> tuple[list[Finding], list[Disagreement], str]:
-        """Use Claude to deduplicate findings and identify contradictions.
-
-        Returns (findings, stark_disagreements, raw_reasoning).
-        """
-        detection_prompt = build_dedup_prompt(prompt, responses)
-
+        model: str | None = None,
+    ) -> tuple[str, dict[str, int] | None]:
+        """Make a single-turn orchestrator call. Returns (text, usage_info)."""
         result_chunks: list[str] = []
         options = ClaudeAgentOptions(
-            model="haiku",
+            model=model or self.config.orchestrator_model,
             max_turns=1,
         )
 
         usage_info: dict[str, int] | None = None
-        async for message in query(prompt=detection_prompt, options=options):
+        async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -407,17 +408,50 @@ class Orchestrator:
                         + getattr(u, "output_tokens", 0),
                     }
 
-        raw = "".join(result_chunks)
-        if span is not None:
-            tracing.log_generation(
-                span,
-                name="dedup_call",
-                model=self.config.orchestrator_model,
-                input=detection_prompt,
-                output=raw,
-                usage=usage_info,
+        return "".join(result_chunks), usage_info
+
+    async def _deduplicate_findings(
+        self,
+        prompt: str,
+        responses: list[AgentResponse],
+        span: Any = None,
+    ) -> tuple[list[Finding], list[Disagreement], str]:
+        """Use Claude to deduplicate findings and identify contradictions.
+
+        Returns (findings, stark_disagreements, raw_reasoning).
+        Retries once on parse failure.
+        """
+        detection_prompt = build_dedup_prompt(prompt, responses)
+
+        raw = ""
+        findings: list[Finding] = []
+        disagreements: list[Disagreement] = []
+
+        for attempt in range(2):
+            raw, usage_info = await self._call_orchestrator(
+                detection_prompt, model="haiku"
             )
-        findings, disagreements = self._parse_dedup_response(raw)
+
+            if span is not None:
+                tracing.log_generation(
+                    span,
+                    name=f"dedup_call{'_retry' if attempt > 0 else ''}",
+                    model="haiku",
+                    input=detection_prompt,
+                    output=raw,
+                    usage=usage_info,
+                )
+
+            findings, disagreements = self._parse_dedup_response(raw)
+
+            if findings or attempt == 1:
+                break
+
+            logger.warning(
+                "Dedup returned empty findings (attempt %d), retrying",
+                attempt + 1,
+            )
+
         return findings, disagreements, raw
 
     @staticmethod
@@ -505,28 +539,8 @@ class Orchestrator:
             debate_responses=debate_responses,
         )
 
-        result_chunks: list[str] = []
-        options = ClaudeAgentOptions(
-            model=self.config.orchestrator_model,
-            max_turns=1,
-        )
+        raw, usage_info = await self._call_orchestrator(synthesis_prompt)
 
-        usage_info: dict[str, int] | None = None
-        async for message in query(prompt=synthesis_prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        result_chunks.append(block.text)
-                if hasattr(message, "usage") and message.usage is not None:
-                    u = message.usage
-                    usage_info = {
-                        "input_tokens": getattr(u, "input_tokens", 0),
-                        "output_tokens": getattr(u, "output_tokens", 0),
-                        "total_tokens": getattr(u, "input_tokens", 0)
-                        + getattr(u, "output_tokens", 0),
-                    }
-
-        raw = "".join(result_chunks)
         if span is not None:
             tracing.log_generation(
                 span,
