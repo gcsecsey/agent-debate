@@ -5,6 +5,11 @@ from __future__ import annotations
 from .providers import PROVIDERS
 from .types import DebateConfig, ProviderConfig
 
+MODEL_GROUPS: dict[str, str] = {
+    "top": "claude:opus,gemini,codex",
+    "fast": "claude:sonnet,codex:codex-mini,gemini:gemini-2.0-flash",
+}
+
 
 def parse_provider_string(spec: str) -> ProviderConfig:
     """Parse a provider spec like 'claude:opus' or 'codex' into a ProviderConfig."""
@@ -20,13 +25,18 @@ def parse_provider_string(spec: str) -> ProviderConfig:
 
 
 def parse_providers_string(specs: str) -> list[ProviderConfig]:
-    """Parse a comma-separated list of provider specs.
+    """Parse a comma-separated list of provider specs, or a group name.
 
     Examples:
+        "top"                                    (expands to claude:opus,gemini,codex)
+        "fast"                                   (expands to claude:sonnet,codex:codex-mini,gemini:gemini-2.0-flash)
         "claude:opus,claude:sonnet,claude:haiku"
         "claude:opus,codex,gemini"
-        "claude:opus,claude:opus,claude:opus"  (same provider multiple times)
     """
+    specs = specs.strip()
+    if specs in MODEL_GROUPS:
+        specs = MODEL_GROUPS[specs]
+
     configs = []
     for spec in specs.split(","):
         spec = spec.strip()
@@ -36,25 +46,15 @@ def parse_providers_string(specs: str) -> list[ProviderConfig]:
     if not configs:
         raise ValueError("No providers specified")
 
-    # Disambiguate agent IDs when the same provider:model appears multiple times
-    seen: dict[str, int] = {}
-    for config in configs:
-        base_id = config.agent_id
-        count = seen.get(base_id, 0)
-        seen[base_id] = count + 1
-        if count > 0:
-            # Append a suffix to make agent_id unique
-            config.persona = config.persona  # preserve any existing persona
-            # We'll handle dedup in the orchestrator via index
-
     return configs
 
 
 def build_config(
-    providers: str = "claude:opus,claude:sonnet,claude:haiku",
-    max_rounds: int = 3,
+    providers: str = "top",
+    max_rounds: int = 1,
     cwd: str = ".",
     orchestrator_model: str = "sonnet",
+    report_dir: str | None = ".context/debate",
 ) -> DebateConfig:
     """Build a DebateConfig from CLI-style arguments."""
     return DebateConfig(
@@ -62,4 +62,5 @@ def build_config(
         max_rounds=max_rounds,
         cwd=cwd,
         orchestrator_model=orchestrator_model,
+        report_dir=report_dir,
     )

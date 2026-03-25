@@ -1,11 +1,10 @@
-"""Tests for the orchestrator debate loop with mocked providers."""
+"""Tests for the orchestrator with mocked providers."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -15,7 +14,7 @@ from agent_debate.types import (
     DebateConfig,
     Disagreement,
     EventType,
-    PositionUpdate,
+    Finding,
     ProviderConfig,
 )
 
@@ -55,160 +54,89 @@ def make_config(num_agents: int = 3) -> DebateConfig:
     providers = [
         ProviderConfig(provider="claude", model=f"agent{i}") for i in range(num_agents)
     ]
-    return DebateConfig(providers=providers, max_rounds=3)
+    return DebateConfig(providers=providers, max_rounds=1, report_dir=None)
 
 
-class TestParseDisagreements:
+class TestParseDedupResponse:
     def test_valid_json(self):
         raw = json.dumps(
-            [
-                {
-                    "topic": "JWT vs Sessions",
-                    "positions": {"a1": "JWT", "a2": "Sessions"},
-                    "questions": ["What scale?"],
-                }
-            ]
-        )
-        result = Orchestrator._parse_disagreements(raw)
-        assert len(result) == 1
-        assert result[0].topic == "JWT vs Sessions"
-        assert result[0].positions == {"a1": "JWT", "a2": "Sessions"}
-        assert result[0].questions == ["What scale?"]
-
-    def test_json_wrapped_in_text(self):
-        raw = (
-            "Here are the disagreements:\n"
-            + json.dumps(
-                [
+            {
+                "findings": [
                     {
-                        "topic": "DB choice",
-                        "positions": {"a1": "Postgres", "a2": "SQLite"},
-                        "questions": [],
+                        "topic": "Use connection pooling",
+                        "description": "Both agents recommend connection pooling",
+                        "agents": ["a1", "a2"],
+                        "severity": "important",
                     }
-                ]
-            )
-            + "\nThat's all."
+                ],
+                "stark_disagreements": [
+                    {
+                        "topic": "JWT vs Sessions",
+                        "positions": {"a1": "JWT", "a2": "Sessions"},
+                    }
+                ],
+            }
         )
-        result = Orchestrator._parse_disagreements(raw)
-        assert len(result) == 1
-        assert result[0].topic == "DB choice"
+        findings, disagreements = Orchestrator._parse_dedup_response(raw)
+        assert len(findings) == 1
+        assert findings[0].topic == "Use connection pooling"
+        assert findings[0].agents == ["a1", "a2"]
+        assert len(disagreements) == 1
+        assert disagreements[0].topic == "JWT vs Sessions"
 
-    def test_empty_array(self):
-        result = Orchestrator._parse_disagreements("[]")
-        assert result == []
+    def test_json_wrapped_in_markdown(self):
+        raw = (
+            "Here is the analysis:\n```json\n"
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "topic": "DB choice",
+                            "description": "Use Postgres",
+                            "agents": ["a1"],
+                            "severity": "critical",
+                        }
+                    ],
+                    "stark_disagreements": [],
+                }
+            )
+            + "\n```\nDone."
+        )
+        findings, disagreements = Orchestrator._parse_dedup_response(raw)
+        assert len(findings) == 1
+        assert findings[0].severity == "critical"
+        assert disagreements == []
 
     def test_no_json(self):
-        result = Orchestrator._parse_disagreements("No disagreements found.")
-        assert result == []
+        findings, disagreements = Orchestrator._parse_dedup_response(
+            "No findings to report."
+        )
+        assert findings == []
+        assert disagreements == []
 
     def test_invalid_json(self):
-        result = Orchestrator._parse_disagreements("[{invalid json}]")
-        assert result == []
-
-    def test_missing_topic(self):
-        raw = json.dumps([{"positions": {"a1": "x"}}])
-        result = Orchestrator._parse_disagreements(raw)
-        assert result == []
-
-
-class TestRoundClassification:
-    def test_empty_new_is_consensus(self):
-        old = [Disagreement("topic", {"a": "x", "b": "y"})]
-        assert Orchestrator._classify_round(old, [], []) == "consensus"
-
-    def test_same_topics_same_positions_is_deadlock(self):
-        old = [Disagreement("topic", {"a": "x", "b": "y"})]
-        new = [Disagreement("topic", {"a": "x", "b": "y"})]
-        assert Orchestrator._classify_round(old, new, []) == "deadlock"
-
-    def test_fewer_topics_is_progress(self):
-        old = [
-            Disagreement("topic1", {"a": "x", "b": "y"}),
-            Disagreement("topic2", {"a": "p", "b": "q"}),
-        ]
-        new = [Disagreement("topic1", {"a": "x", "b": "y"})]
-        assert Orchestrator._classify_round(old, new, []) == "progress"
-
-    def test_same_count_different_positions_is_progress(self):
-        old = [Disagreement("topic", {"a": "x", "b": "y"})]
-        new = [Disagreement("topic", {"a": "x", "b": "z"})]
-        assert Orchestrator._classify_round(old, new, []) == "progress"
-
-    def test_position_shift_is_progress_even_if_judge_summary_matches(self):
-        old = [Disagreement("topic", {"a": "x", "b": "y"})]
-        new = [Disagreement("topic", {"a": "x", "b": "y"})]
-        responses = [
-            AgentResponse(
-                "a",
-                "claude",
-                "opus",
-                2,
-                "Updated analysis",
-                "Architect",
-                [
-                    PositionUpdate(
-                        topic="topic",
-                        previous_position="Use x",
-                        next_position="Use compromise z",
-                        change_type="compromise",
-                    )
-                ],
-            )
-        ]
-        assert Orchestrator._classify_round(old, new, responses) == "progress"
-
-    def test_more_topics_is_progress(self):
-        old = [Disagreement("topic1", {"a": "x"})]
-        new = [
-            Disagreement("topic1", {"a": "x"}),
-            Disagreement("topic2", {"a": "y"}),
-        ]
-        assert Orchestrator._classify_round(old, new, []) == "progress"
-
-
-class TestPositionUpdates:
-    def test_parse_position_updates(self):
-        raw = json.dumps(
-            [
-                {
-                    "topic": "JWT vs Sessions",
-                    "previous_position": "Use JWT",
-                    "next_position": "Use Sessions",
-                    "change_type": "revise",
-                    "convincing_argument": "Revocation matters more",
-                    "confidence": "medium",
-                    "remaining_concern": "Need Redis",
-                }
-            ]
+        findings, disagreements = Orchestrator._parse_dedup_response(
+            "{invalid json}"
         )
-        result = Orchestrator._parse_position_updates(raw)
-        assert len(result) == 1
-        assert result[0].topic == "JWT vs Sessions"
-        assert result[0].change_type == "revise"
+        assert findings == []
+        assert disagreements == []
 
-    def test_extract_position_updates_from_structured_section(self):
-        raw = """### Response to Disagreements
-Keep sessions.
+    def test_empty_findings(self):
+        raw = json.dumps({"findings": [], "stark_disagreements": []})
+        findings, disagreements = Orchestrator._parse_dedup_response(raw)
+        assert findings == []
+        assert disagreements == []
 
-### Structured Position Updates
-```json
-[
-  {
-    "topic": "JWT vs Sessions",
-    "previous_position": "Use JWT",
-    "next_position": "Use Sessions",
-    "change_type": "revise",
-    "convincing_argument": "Revocation matters more",
-    "confidence": "medium",
-    "remaining_concern": "Need Redis"
-  }
-]
-```
-"""
-        content, updates = Orchestrator._extract_position_updates(raw)
-        assert "Structured Position Updates" not in content
-        assert len(updates) == 1
-        assert updates[0].next_position == "Use Sessions"
+    def test_missing_topic_skipped(self):
+        raw = json.dumps(
+            {
+                "findings": [{"description": "no topic"}],
+                "stark_disagreements": [{"positions": {"a": "x"}}],
+            }
+        )
+        findings, disagreements = Orchestrator._parse_dedup_response(raw)
+        assert findings == []
+        assert disagreements == []
 
 
 class TestAgentIdDedup:
@@ -217,7 +145,8 @@ class TestAgentIdDedup:
             providers=[
                 ProviderConfig("claude", "opus"),
                 ProviderConfig("claude", "sonnet"),
-            ]
+            ],
+            report_dir=None,
         )
         orch = Orchestrator.__new__(Orchestrator)
         orch.config = config
@@ -230,7 +159,8 @@ class TestAgentIdDedup:
                 ProviderConfig("claude", "opus"),
                 ProviderConfig("claude", "opus"),
                 ProviderConfig("claude", "opus"),
-            ]
+            ],
+            report_dir=None,
         )
         orch = Orchestrator.__new__(Orchestrator)
         orch.config = config
