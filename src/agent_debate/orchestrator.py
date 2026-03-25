@@ -313,7 +313,7 @@ class Orchestrator:
 
         result_chunks: list[str] = []
         options = ClaudeAgentOptions(
-            model=self.config.orchestrator_model,
+            model="haiku",
             max_turns=1,
         )
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .types import AgentResponse, Disagreement
 
 
@@ -58,14 +60,54 @@ def _format_responses(responses: list[AgentResponse]) -> str:
     return "\n\n---\n\n".join(_format_response_simple(r) for r in responses)
 
 
+def _summarize_prompt(prompt: str, max_chars: int = 200) -> str:
+    """Truncate prompt to a short summary for judge-facing prompts."""
+    if len(prompt) <= max_chars:
+        return prompt
+    return prompt[:max_chars] + "..."
+
+
+_STRUCTURED_HEADERS = re.compile(
+    r"^###\s+(Key Decisions|Trade-offs|Concerns)\s*$",
+    re.MULTILINE,
+)
+_ANY_H3 = re.compile(r"^###\s+", re.MULTILINE)
+
+
+def _extract_structured_sections(content: str) -> str:
+    """Extract Key Decisions, Trade-offs, and Concerns sections from a response.
+
+    Drops the Approach (narrative prose) and Proposed Changes (code blocks)
+    sections to reduce token count.  Falls back to full content when no
+    recognised headers are found (e.g. debate-round responses).
+    """
+    matches = list(_STRUCTURED_HEADERS.finditer(content))
+    if not matches:
+        return content
+
+    parts: list[str] = []
+    for match in matches:
+        start = match.start()
+        # Find where the next ### header starts (any header, not just ours)
+        rest = content[match.end():]
+        next_h3 = _ANY_H3.search(rest)
+        if next_h3:
+            end = match.end() + next_h3.start()
+        else:
+            end = len(content)
+        parts.append(content[start:end].strip())
+
+    return "\n\n".join(parts)
+
+
 # --- Deduplication ---
 
 DEDUP_TEMPLATE = """\
 You are analyzing multiple AI agent responses to extract and deduplicate findings.
 
-## Original Request
+## Original Request (summary)
 
-{prompt}
+{prompt_summary}
 
 ## Agent Responses
 
@@ -120,9 +162,20 @@ def build_dedup_prompt(
     responses: list[AgentResponse],
 ) -> str:
     """Build the prompt for the orchestrator to deduplicate findings."""
+    # Extract only structured sections from each response to reduce tokens
+    trimmed = [
+        AgentResponse(
+            agent_id=r.agent_id,
+            provider=r.provider,
+            model=r.model,
+            round_number=r.round_number,
+            content=_extract_structured_sections(r.content),
+        )
+        for r in responses
+    ]
     return DEDUP_TEMPLATE.format(
-        prompt=user_prompt,
-        responses=_format_responses(responses),
+        prompt_summary=_summarize_prompt(user_prompt),
+        responses=_format_responses(trimmed),
     )
 
 
@@ -132,13 +185,13 @@ TARGETED_DEBATE_TEMPLATE = """\
 You are responding to a specific contradiction identified between your analysis \
 and another agent's analysis.
 
-## Original Request
+## Original Request (summary)
 
-{prompt}
+{prompt_summary}
 
-## Your Previous Analysis
+## Your Previous Position
 
-{own_response}
+{own_position}
 
 ## The Contradiction
 
@@ -170,9 +223,11 @@ def build_targeted_debate_prompt(
         if aid != own_response.agent_id
     )
 
+    own_position = disagreement.positions.get(own_response.agent_id, "")
+
     return TARGETED_DEBATE_TEMPLATE.format(
-        prompt=user_prompt,
-        own_response=_format_response_simple(own_response),
+        prompt_summary=_summarize_prompt(user_prompt),
+        own_position=own_position,
         disagreement=f"**{disagreement.topic}**\n"
         + "\n".join(
             f"- {aid}: {pos}" for aid, pos in disagreement.positions.items()
@@ -190,11 +245,9 @@ You are synthesizing a multi-perspective analysis into a clear, actionable summa
 
 {prompt}
 
-## Agent Analyses
-
-{responses}
-
 ## Deduplicated Findings
+
+The findings below were extracted from {agent_count} agent analyses.
 
 {findings}
 
@@ -253,7 +306,7 @@ def build_synthesis_prompt(
 
     return SYNTHESIS_TEMPLATE.format(
         prompt=user_prompt,
-        responses=_format_responses(responses),
+        agent_count=len(responses),
         findings=findings_text,
         disagreements=disagreements_text,
         debate_section=debate_section,
