@@ -12,7 +12,7 @@ from rich.panel import Panel
 from .config import build_config
 from .orchestrator import Orchestrator
 from .providers import discover_available
-from .types import AgentResponse, EventType
+from .types import AgentResponse, DebateEvent, EventType
 
 console = Console()
 
@@ -99,12 +99,84 @@ class LiveDebateDisplay:
             self._live.update(self._render())
 
 
+def _handle_event(display: LiveDebateDisplay, event: DebateEvent) -> None:
+    """Route a DebateEvent to the appropriate display action."""
+    match event.type:
+        case EventType.ROUND_START:
+            display.set_phase(
+                f"Round {event.round_number}: Independent Analysis",
+                style="blue",
+            )
+        case EventType.AGENT_STARTED:
+            display.agent_started(event.agent_id or "unknown")
+        case EventType.AGENT_CHUNK:
+            display.agent_chunk(event.agent_id or "unknown", event.content)
+        case EventType.AGENT_COMPLETED:
+            display.agent_completed(event.agent_id or "unknown")
+        case EventType.DISAGREEMENT_FOUND:
+            positions = event.metadata.get("positions", {})
+            pos_text = "\n".join(
+                f"  {key}: {value}" for key, value in positions.items()
+            )
+            display.add_static(
+                Panel(
+                    f"[bold]{event.content}[/bold]\n{pos_text}",
+                    title="[bold yellow]Disagreement[/bold yellow]",
+                    border_style="yellow",
+                )
+            )
+        case EventType.DEBATE_ROUND_START:
+            display.clear_agents()
+            display.set_phase(
+                f"Debate Round {event.round_number}",
+                style="cyan",
+            )
+        case EventType.CONSENSUS_REACHED:
+            display.add_static(
+                Panel(
+                    f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
+                    style="green",
+                )
+            )
+        case EventType.DEADLOCK_RESOLVED:
+            display.clear_agents()
+            display.add_static(
+                Panel(
+                    Markdown(event.content),
+                    title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
+                    border_style="red",
+                )
+            )
+        case EventType.SYNTHESIS_START:
+            display.clear_agents()
+            display.add_static(
+                Panel("[bold]Synthesizing results...[/bold]", style="magenta")
+            )
+        case EventType.SYNTHESIS_COMPLETE:
+            display.add_static(
+                Panel(
+                    Markdown(event.content),
+                    title="[bold magenta]Final Synthesis[/bold magenta]",
+                    border_style="magenta",
+                )
+            )
+        case EventType.ERROR:
+            display.add_static(
+                Panel(
+                    f"[bold red]{event.content}[/bold red]",
+                    title=f"Error ({event.agent_id or 'unknown'})",
+                    border_style="red",
+                )
+            )
+
+
 async def _run(
     prompt: str,
     providers: str,
     max_rounds: int,
     cwd: str,
     orchestrator_model: str,
+    opening_only: bool = False,
 ) -> None:
     """Async entry point for the debate."""
     config = build_config(
@@ -126,79 +198,30 @@ async def _run(
 
     orchestrator = Orchestrator(config)
     display = LiveDebateDisplay()
+    opening_responses: list[AgentResponse] = []
 
+    # Phase 1: Opening arguments
     with display.start():
-        async for event in orchestrator.run(prompt):
-            if isinstance(event, AgentResponse):
+        async for event in orchestrator.run_opening(prompt):
+            if event.type == EventType.OPENING_COMPLETE:
+                opening_responses = event.metadata["responses"]
                 continue
+            _handle_event(display, event)
 
-            match event.type:
-                case EventType.ROUND_START:
-                    display.set_phase(
-                        f"Round {event.round_number}: Independent Analysis",
-                        style="blue",
-                    )
-                case EventType.AGENT_STARTED:
-                    display.agent_started(event.agent_id or "unknown")
-                case EventType.AGENT_CHUNK:
-                    display.agent_chunk(event.agent_id or "unknown", event.content)
-                case EventType.AGENT_COMPLETED:
-                    display.agent_completed(event.agent_id or "unknown")
-                case EventType.DISAGREEMENT_FOUND:
-                    positions = event.metadata.get("positions", {})
-                    pos_text = "\n".join(
-                        f"  {key}: {value}" for key, value in positions.items()
-                    )
-                    display.add_static(
-                        Panel(
-                            f"[bold]{event.content}[/bold]\n{pos_text}",
-                            title="[bold yellow]Disagreement[/bold yellow]",
-                            border_style="yellow",
-                        )
-                    )
-                case EventType.DEBATE_ROUND_START:
-                    display.clear_agents()
-                    display.set_phase(
-                        f"Debate Round {event.round_number}",
-                        style="cyan",
-                    )
-                case EventType.CONSENSUS_REACHED:
-                    display.add_static(
-                        Panel(
-                            f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
-                            style="green",
-                        )
-                    )
-                case EventType.DEADLOCK_RESOLVED:
-                    display.clear_agents()
-                    display.add_static(
-                        Panel(
-                            Markdown(event.content),
-                            title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
-                            border_style="red",
-                        )
-                    )
-                case EventType.SYNTHESIS_START:
-                    display.clear_agents()
-                    display.add_static(
-                        Panel("[bold]Synthesizing results...[/bold]", style="magenta")
-                    )
-                case EventType.SYNTHESIS_COMPLETE:
-                    display.add_static(
-                        Panel(
-                            Markdown(event.content),
-                            title="[bold magenta]Final Synthesis[/bold magenta]",
-                            border_style="magenta",
-                        )
-                    )
-                case EventType.ERROR:
-                    display.add_static(
-                        Panel(
-                            f"[bold red]{event.content}[/bold red]",
-                            title=f"Error ({event.agent_id or 'unknown'})",
-                            border_style="red",
-                        )
-                    )
+    # If opening-only mode, stop here
+    if opening_only:
+        return
+
+    # Checkpoint: ask human whether to proceed
+    if not click.confirm("\nProceed with debate?", default=True):
+        console.print("[dim]Debate skipped.[/dim]")
+        return
+
+    # Phase 2: Debate rounds + synthesis
+    display = LiveDebateDisplay()
+    with display.start():
+        async for event in orchestrator.run_debate(prompt, opening_responses):
+            _handle_event(display, event)
 
 
 @click.group()
@@ -236,12 +259,19 @@ def main() -> None:
     default="sonnet",
     help="Model for the orchestrator (disagreement detection, synthesis)",
 )
+@click.option(
+    "--opening-only",
+    is_flag=True,
+    default=False,
+    help="Run only the opening arguments phase (no debate or checkpoint prompt)",
+)
 def run(
     prompt: str,
     providers: str,
     max_rounds: int,
     cwd: str,
     orchestrator_model: str,
+    opening_only: bool,
 ) -> None:
     """Run a multi-agent debate.
 
@@ -255,7 +285,7 @@ def run(
 
         agent-debate run -r 2 -d ./my-project "Plan the database migration"
     """
-    anyio.run(_run, prompt, providers, max_rounds, cwd, orchestrator_model)
+    anyio.run(_run, prompt, providers, max_rounds, cwd, orchestrator_model, opening_only)
 
 
 @main.command()
