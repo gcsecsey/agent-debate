@@ -24,13 +24,13 @@ Parse the arguments to extract:
 
 ### Step 1: Check for agent-debate package
 
-Try to detect if the `agent-debate` Python package is installed:
+Try to detect if the `agent-debate` Python package is installed. Check the plugin's own venv first, then PATH:
 
 ```bash
-command -v agent-debate && agent-debate discover
+DEBATE_BIN=""; if [ -x "$HOME/code/agent-debate/venv/bin/agent-debate" ]; then DEBATE_BIN="$HOME/code/agent-debate/venv/bin/agent-debate"; elif command -v agent-debate &>/dev/null; then DEBATE_BIN="agent-debate"; fi; [ -n "$DEBATE_BIN" ] && "$DEBATE_BIN" discover
 ```
 
-**If agent-debate is available**, use **Package Mode** (Step 2A).
+**If agent-debate is available** (DEBATE_BIN is set), use **Package Mode** (Step 2A). Use `$DEBATE_BIN` in place of `agent-debate` in all commands below.
 **If not available**, use **Built-in Mode** (Step 2B).
 
 ---
@@ -43,13 +43,13 @@ For the checkpoint flow, use two steps:
 
 ```bash
 # Phase 1: Opening arguments only
-agent-debate run "<prompt>" --providers "<providers>" --opening-only --cwd "$(pwd)"
+$DEBATE_BIN run "<prompt>" --providers "<providers>" --opening-only --cwd "$(pwd)"
 ```
 
 Present the output to the user and ask if they want to proceed with the debate. If yes, run the full debate:
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
+$DEBATE_BIN run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
 ```
 
 Read the output and present it to the user. Done.
