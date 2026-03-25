@@ -5,13 +5,13 @@
     "url": "https://github.com/gcsecsey/agent-debate"
   },
   "metadata": {
-    "description": "Multi-agent debate system for Claude Code",
+    "description": "Multi-perspective analysis system for Claude Code",
     "version": "1.0.0"
   },
   "plugins": [
     {
       "name": "debate",
-      "description": "Multi-agent debate: fan out prompts to multiple AI coding agents, let them debate disagreements, and synthesize a consensus recommendation",
+      "description": "Multi-perspective analysis: fan out prompts to multiple AI agents, deduplicate findings, and synthesize actionable recommendations",
       "source": "./plugin/debate",
       "version": "0.1.0",
       "author": {

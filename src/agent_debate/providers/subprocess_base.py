@@ -94,8 +94,10 @@ class SubprocessProvider(BaseProvider):
                 assert proc.stderr is not None
                 stderr = await proc.stderr.read()
                 error_msg = stderr.decode("utf-8", errors="replace").strip()
-                if error_msg:
-                    yield f"\n\n[Error from {self.id}: {error_msg}]"
+                raise RuntimeError(
+                    f"Provider '{self.id}' exited with code {proc.returncode}"
+                    + (f": {error_msg}" if error_msg else "")
+                )
         finally:
             Path(prompt_file).unlink(missing_ok=True)
 

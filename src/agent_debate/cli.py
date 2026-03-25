@@ -9,7 +9,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from .config import build_config
+from .config import MODEL_GROUPS, build_config
 from .orchestrator import Orchestrator
 from .providers import discover_available
 from .types import AgentResponse, EventType
@@ -105,21 +105,23 @@ async def _run(
     max_rounds: int,
     cwd: str,
     orchestrator_model: str,
+    report_dir: str | None,
 ) -> None:
-    """Async entry point for the debate."""
+    """Async entry point for the analysis."""
     config = build_config(
         providers=providers,
         max_rounds=max_rounds,
         cwd=cwd,
         orchestrator_model=orchestrator_model,
+        report_dir=report_dir,
     )
 
     console.print(
         Panel(
             f"[bold]Prompt:[/bold] {prompt}\n"
             f"[bold]Agents:[/bold] {', '.join(c.agent_id for c in config.providers)}\n"
-            f"[bold]Max rounds:[/bold] {max_rounds}",
-            title="[bold]Agent Debate[/bold]",
+            f"[bold]Max debate rounds:[/bold] {max_rounds}",
+            title="[bold]Multi-Perspective Analysis[/bold]",
             border_style="bright_blue",
         )
     )
@@ -135,7 +137,7 @@ async def _run(
             match event.type:
                 case EventType.ROUND_START:
                     display.set_phase(
-                        f"Round {event.round_number}: Independent Analysis",
+                        "Phase 1: Independent Analysis",
                         style="blue",
                     )
                 case EventType.AGENT_STARTED:
@@ -144,39 +146,28 @@ async def _run(
                     display.agent_chunk(event.agent_id or "unknown", event.content)
                 case EventType.AGENT_COMPLETED:
                     display.agent_completed(event.agent_id or "unknown")
-                case EventType.DISAGREEMENT_FOUND:
-                    positions = event.metadata.get("positions", {})
-                    pos_text = "\n".join(
-                        f"  {key}: {value}" for key, value in positions.items()
+                case EventType.DEDUP_START:
+                    display.clear_agents()
+                    display.set_phase(
+                        "Phase 2: Deduplicating Findings",
+                        style="yellow",
                     )
+                case EventType.DEDUP_COMPLETE:
+                    fc = event.metadata.get("findings_count", 0)
+                    dc = event.metadata.get("disagreements_count", 0)
                     display.add_static(
                         Panel(
-                            f"[bold]{event.content}[/bold]\n{pos_text}",
-                            title="[bold yellow]Disagreement[/bold yellow]",
+                            f"[bold]{fc} findings[/bold] extracted, "
+                            f"[bold]{dc} stark disagreement(s)[/bold]",
+                            title="[bold yellow]Deduplication Complete[/bold yellow]",
                             border_style="yellow",
                         )
                     )
-                case EventType.DEBATE_ROUND_START:
+                case EventType.TARGETED_DEBATE_START:
                     display.clear_agents()
                     display.set_phase(
-                        f"Debate Round {event.round_number}",
+                        "Phase 3: Targeted Debate (stark disagreements found)",
                         style="cyan",
-                    )
-                case EventType.CONSENSUS_REACHED:
-                    display.add_static(
-                        Panel(
-                            f"[bold green]Consensus reached after round {event.round_number}[/bold green]",
-                            style="green",
-                        )
-                    )
-                case EventType.DEADLOCK_RESOLVED:
-                    display.clear_agents()
-                    display.add_static(
-                        Panel(
-                            Markdown(event.content),
-                            title=f"[bold red]Judge Resolution (round {event.round_number})[/bold red]",
-                            border_style="red",
-                        )
                     )
                 case EventType.SYNTHESIS_START:
                     display.clear_agents()
@@ -200,12 +191,17 @@ async def _run(
                         )
                     )
 
+    if report_dir and orchestrator._report:
+        console.print(
+            f"\n[dim]Full report saved to: {orchestrator._report.run_dir}[/dim]"
+        )
+
 
 @click.group()
 def main() -> None:
-    """Multi-agent debate system.
+    """Multi-perspective analysis system.
 
-    Fan out prompts to AI coding agents, let them debate, synthesize results.
+    Fan out prompts to AI coding agents, deduplicate findings, synthesize results.
     """
 
 
@@ -214,15 +210,18 @@ def main() -> None:
 @click.option(
     "--providers",
     "-p",
-    default="claude:opus,claude:sonnet,claude:haiku",
-    help="Comma-separated provider specs (e.g. claude:opus,codex,gemini)",
+    default="top",
+    help=(
+        "Comma-separated provider specs or group name. "
+        f"Groups: {', '.join(f'{k} ({v})' for k, v in MODEL_GROUPS.items())}"
+    ),
 )
 @click.option(
     "--max-rounds",
     "-r",
-    default=3,
+    default=1,
     type=int,
-    help="Maximum number of debate rounds",
+    help="Maximum targeted debate rounds (0 to disable debate entirely)",
 )
 @click.option(
     "--cwd",
@@ -234,7 +233,13 @@ def main() -> None:
     "--orchestrator-model",
     "-m",
     default="sonnet",
-    help="Model for the orchestrator (disagreement detection, synthesis)",
+    help="Model for the orchestrator (deduplication, synthesis)",
+)
+@click.option(
+    "--no-report",
+    is_flag=True,
+    default=False,
+    help="Disable saving the markdown report",
 )
 def run(
     prompt: str,
@@ -242,20 +247,26 @@ def run(
     max_rounds: int,
     cwd: str,
     orchestrator_model: str,
+    no_report: bool,
 ) -> None:
-    """Run a multi-agent debate.
+    """Run a multi-perspective analysis.
 
-    PROMPT is the question or task to debate.
+    PROMPT is the question or task to analyze.
 
     Examples:
 
         agent-debate run "Review the auth module for security issues"
 
-        agent-debate run -p claude:opus,codex,gemini "Should we use REST or gRPC?"
+        agent-debate run -p top "Should we use REST or gRPC?"
 
-        agent-debate run -r 2 -d ./my-project "Plan the database migration"
+        agent-debate run -p fast "Plan the database migration"
+
+        agent-debate run -p claude:opus,codex,gemini "Design the caching layer"
     """
-    anyio.run(_run, prompt, providers, max_rounds, cwd, orchestrator_model)
+    report_dir = None if no_report else ".context/debate"
+    anyio.run(
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir
+    )
 
 
 @main.command()
@@ -266,6 +277,12 @@ def discover() -> None:
     for name, available in sorted(availability.items()):
         icon = "[green]available[/green]" if available else "[red]not found[/red]"
         console.print(f"  {name}: {icon}")
+
+    console.print(
+        f"\n[dim]Model groups: "
+        + ", ".join(f"{k} = {v}" for k, v in MODEL_GROUPS.items())
+        + "[/dim]"
+    )
 
 
 if __name__ == "__main__":

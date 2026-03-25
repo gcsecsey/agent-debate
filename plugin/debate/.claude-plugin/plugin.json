@@ -1,6 +1,6 @@
 {
   "name": "debate",
-  "description": "Multi-agent debate: fan out prompts to multiple AI coding agents, let them debate disagreements, and synthesize a consensus recommendation",
+  "description": "Multi-perspective analysis: fan out prompts to multiple AI agents, deduplicate findings, and synthesize actionable recommendations",
   "version": "0.1.0",
   "author": {
     "name": "Gergely Csecsey",
