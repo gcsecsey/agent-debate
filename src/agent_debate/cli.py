@@ -208,6 +208,21 @@ async def _run(
                 continue
             _handle_event(display, event)
 
+    # Print full opening arguments now that streaming is done
+    console.print()
+    console.print(
+        Panel("[bold]Opening Arguments[/bold]", style="blue")
+    )
+    for response in opening_responses:
+        label = response.persona or response.agent_id
+        console.print(
+            Panel(
+                Markdown(response.content),
+                title=f"[bold]{response.agent_id}[/bold] ({label})",
+                border_style="green",
+            )
+        )
+
     # If opening-only mode, stop here
     if opening_only:
         return
