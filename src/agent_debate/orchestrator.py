@@ -196,109 +196,18 @@ class Orchestrator:
         yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
 
     async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
-        """Run the full debate loop, yielding events as they occur."""
-        judge_resolution: str | None = None
+        """Run the full debate loop, yielding events as they occur.
 
-        yield DebateEvent(type=EventType.ROUND_START, round_number=1)
-
-        round1_responses: list[AgentResponse] = []
-        async for event in self._fan_out_streaming(prompt, round_number=1):
-            if isinstance(event, AgentResponse):
-                round1_responses.append(event)
-            else:
-                yield event
-
-        disagreements = await self._detect_disagreements(prompt, round1_responses)
-        all_responses = [round1_responses]
-
-        if not disagreements:
-            yield DebateEvent(type=EventType.CONSENSUS_REACHED, round_number=1)
-        else:
-            for disagreement in disagreements:
-                yield DebateEvent(
-                    type=EventType.DISAGREEMENT_FOUND,
-                    content=disagreement.topic,
-                    metadata={"positions": disagreement.positions},
-                )
-
-            round_num = 2
-            while disagreements and round_num <= self.config.max_rounds:
-                yield DebateEvent(
-                    type=EventType.DEBATE_ROUND_START,
-                    round_number=round_num,
-                )
-
-                latest_responses: list[AgentResponse] = []
-                async for event in self._debate_round_streaming(
-                    prompt,
-                    all_responses[-1],
-                    disagreements,
-                    round_num,
-                ):
-                    if isinstance(event, AgentResponse):
-                        latest_responses.append(event)
-                    else:
-                        yield event
-
-                all_responses.append(latest_responses)
-
-                new_disagreements = await self._detect_disagreements(
-                    prompt,
-                    latest_responses,
-                    previous=disagreements,
-                )
-
-                round_state = self._classify_round(
-                    disagreements,
-                    new_disagreements,
-                    latest_responses,
-                )
-
-                if round_state == "consensus":
-                    yield DebateEvent(
-                        type=EventType.CONSENSUS_REACHED,
-                        round_number=round_num,
-                    )
-                    disagreements = new_disagreements
-                    break
-
-                if round_state == "deadlock":
-                    disagreements = new_disagreements
-                    judge_resolution = await self._resolve_deadlock(
-                        prompt,
-                        all_responses,
-                        disagreements,
-                    )
-                    yield DebateEvent(
-                        type=EventType.DEADLOCK_RESOLVED,
-                        round_number=round_num,
-                        content=judge_resolution,
-                    )
-                    break
-
-                disagreements = new_disagreements
-                round_num += 1
-
-            if disagreements and judge_resolution is None:
-                judge_resolution = await self._resolve_deadlock(
-                    prompt,
-                    all_responses,
-                    disagreements,
-                )
-                yield DebateEvent(
-                    type=EventType.DEADLOCK_RESOLVED,
-                    round_number=max(1, len(all_responses)),
-                    content=judge_resolution,
-                )
-
-        yield DebateEvent(type=EventType.SYNTHESIS_START)
-        synthesis = await self._synthesize(
-            prompt,
-            all_responses,
-            disagreements,
-            judge_resolution,
-        )
-        yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
+        Convenience method that chains run_opening() and run_debate()
+        without a human checkpoint.
+        """
+        responses: list[AgentResponse] = []
+        async for event in self.run_opening(prompt):
+            yield event
+            if event.type == EventType.OPENING_COMPLETE:
+                responses = event.metadata["responses"]
+        async for event in self.run_debate(prompt, responses):
+            yield event
 
     async def _fan_out_streaming(
         self,

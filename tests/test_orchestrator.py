@@ -370,3 +370,29 @@ class TestRunDebate:
         event_types = [e.type for e in events]
         assert EventType.SYNTHESIS_START in event_types
         assert EventType.DEBATE_ROUND_START not in event_types
+
+
+class TestRunBackwardCompat:
+    @pytest.mark.anyio
+    async def test_run_yields_opening_complete_and_synthesis(self):
+        """run() should chain both phases and yield all events including OPENING_COMPLETE."""
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+        fake = FakeProvider(["Agent response"])
+        orchestrator._providers = {"claude": fake}
+
+        mock_query_result = AsyncMock()
+        mock_query_result.__aiter__ = lambda self: self
+        mock_query_result.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+
+        with patch("agent_debate.orchestrator.query", return_value=mock_query_result):
+            events = []
+            async for event in orchestrator.run("test prompt"):
+                events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.ROUND_START in event_types
+        assert EventType.OPENING_COMPLETE in event_types
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
