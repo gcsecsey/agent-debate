@@ -30,6 +30,16 @@ Try to detect if the `agent-debate` Python package is installed. Check the plugi
 DEBATE_BIN=""; if [ -x "$HOME/code/agent-debate/venv/bin/agent-debate" ]; then DEBATE_BIN="$HOME/code/agent-debate/venv/bin/agent-debate"; elif command -v agent-debate &>/dev/null; then DEBATE_BIN="agent-debate"; fi; [ -n "$DEBATE_BIN" ] && "$DEBATE_BIN" discover
 ```
 
+**IMPORTANT:** Always show the discovery results to the user — print which providers were found and which were not. This is valuable context that should not be hidden in a collapsed tool call. Example output:
+
+```
+## Provider Discovery
+- claude: available
+- codex: not found
+- gemini: not found
+- amp: not found
+```
+
 **If agent-debate is available** (DEBATE_BIN is set), use **Package Mode** (Step 2A). Use `$DEBATE_BIN` in place of `agent-debate` in all commands below.
 **If not available**, use **Built-in Mode** (Step 2B).
 
