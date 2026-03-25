@@ -6,12 +6,10 @@ Inspired by [counselors](https://github.com/aarondfrancis/counselors), but with 
 
 ## How it works
 
-1. Your prompt is sent to multiple agents with different perspectives (Architect, Pragmatist, Reliability Engineer)
-2. An orchestrator (Claude) identifies genuine technical disagreements between their responses
-3. Agents debate the disagreements in follow-up rounds, explicitly advocating for their position while seeing each other's arguments
-4. In debate rounds, agents submit structured position updates so the judge can track what changed and why
-5. The orchestrator detects consensus, and if the debate deadlocks, the judge resolves it with a concrete recommendation
-6. A final synthesis presents: consensus points, resolved disagreements, remaining differences, and a recommended approach
+1. Your prompt is sent to multiple AI agents in parallel (e.g. Claude Opus, Codex, Gemini) — all receive the same prompt, with diversity coming from model differences
+2. An orchestrator (Claude Haiku) extracts and deduplicates findings, then identifies genuine technical contradictions between agents
+3. If contradictions are found, agents debate their positions in a single targeted round, seeing each other's arguments
+4. A final synthesis (Claude Sonnet) presents: key findings, disagreements with both sides' reasoning, a recommended approach, and concrete next steps
 
 ## Supported providers
 
@@ -56,7 +54,7 @@ agent-debate discover
 ### CLI
 
 ```bash
-# Default: 3 Claude agents (opus, sonnet, haiku) debate
+# Default: top group (claude:opus, gemini, codex)
 agent-debate run "Should we use REST or gRPC for the new API?"
 
 # Multi-provider debate
@@ -75,10 +73,12 @@ agent-debate run \
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--providers` | `-p` | `claude:opus,claude:sonnet,claude:haiku` | Comma-separated provider specs |
-| `--max-rounds` | `-r` | `3` | Maximum debate rounds |
+| `--providers` | `-p` | `top` | Comma-separated provider specs or group name |
+| `--max-rounds` | `-r` | `1` | Maximum debate rounds |
 | `--cwd` | `-d` | `.` | Working directory for agents |
 | `--orchestrator-model` | `-m` | `sonnet` | Model for disagreement detection and synthesis |
+| `--timeout` | `-t` | `300` | Timeout per agent call in seconds |
+| `--no-report` | | `false` | Disable saving the markdown report |
 
 #### Provider specs
 
@@ -101,7 +101,7 @@ agent-debate run -p claude:opus,claude:opus,claude:opus "Review this code"
 
 ### Claude Code plugin
 
-The plugin provides a `/debate:run` slash command that works inside Claude Code with zero dependencies (falls back to Task sub-agents if the Python package isn't installed).
+The plugin provides a `/debate:run` slash command that works inside Claude Code. Requires the Python package to be installed.
 
 #### Install the plugin
 
@@ -136,8 +136,8 @@ from agent_debate.orchestrator import Orchestrator
 
 async def main():
     config = build_config(
-        providers="claude:opus,claude:sonnet,claude:haiku",
-        max_rounds=3,
+        providers="top",
+        max_rounds=1,
         cwd=".",
     )
     orchestrator = Orchestrator(config)
@@ -154,7 +154,7 @@ anyio.run(main)
 src/agent_debate/
 ├── types.py              # Event, response, config dataclasses
 ├── config.py             # Provider string parsing
-├── prompts.py            # Prompt templates for personas, debate, synthesis
+├── prompts.py            # Prompt templates for analysis, dedup, debate, synthesis
 ├── providers/
 │   ├── base.py           # Abstract BaseProvider
 │   ├── subprocess_base.py # Shared subprocess logic for CLI providers
@@ -163,7 +163,8 @@ src/agent_debate/
 │   ├── gemini.py         # Gemini via subprocess
 │   └── amp.py            # Amp via subprocess
 ├── orchestrator.py       # Debate loop: fan-out → detect → debate → synthesize
-├── streaming.py          # Async queue-based parallel event merging
+├── report.py             # Markdown report generation
+├── tracing.py            # Optional Langfuse tracing integration
 └── cli.py                # Click CLI
 
 plugin/debate/            # Claude Code plugin (for Automattic marketplace)
