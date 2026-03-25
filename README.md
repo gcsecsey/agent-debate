@@ -172,6 +172,53 @@ plugin/debate/            # Claude Code plugin (for Automattic marketplace)
 └── .claude-plugin/plugin.json
 ```
 
+## Tracing
+
+Optional [Langfuse](https://langfuse.com/) tracing produces structured traces with per-phase spans and per-LLM-call generations, giving visibility into token usage, cost, and latency.
+
+### Setup
+
+Install with the tracing extra:
+
+```bash
+pip install -e ".[tracing]"
+```
+
+Create a `.env` file in the project root (already gitignored):
+
+```
+LANGFUSE_HOST=https://langfuse.a8c.com
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+```
+
+Get your API keys from Langfuse → Settings → API Keys.
+
+### How it works
+
+Tracing is automatically enabled when the Langfuse SDK is installed and the environment variables are set. No CLI flags or code changes needed — just run `agent-debate` as usual and traces appear in Langfuse.
+
+Each debate run produces a trace with this structure:
+
+```
+debate_run (trace)
+├── round_1 (span)
+│   ├── claude:opus (generation)
+│   ├── codex (generation)
+│   └── gemini (generation)
+├── dedup (span)
+│   └── dedup_call (generation)
+├── targeted_debate (span, if disagreements exist)
+│   ├── claude:opus (generation)
+│   └── ...
+├── re_dedup (span, if debate occurred)
+│   └── dedup_call (generation)
+└── synthesis (span)
+    └── synthesis_call (generation)
+```
+
+When Langfuse is not installed or not configured, tracing is silently disabled with zero overhead.
+
 ## Development
 
 ```bash

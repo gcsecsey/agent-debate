@@ -7,12 +7,14 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, TextBlock
 
+from . import tracing
 from .prompts import (
     build_dedup_prompt,
     build_round1_prompt,
@@ -75,71 +77,107 @@ class Orchestrator:
             self._report = ReportWriter(self.config.report_dir, self.config.cwd)
             self._report.start_run(prompt, self.config.providers)
 
-        # Phase 1: Independent analysis
-        yield DebateEvent(type=EventType.ROUND_START, round_number=1)
-
-        responses: list[AgentResponse] = []
-        async for event in self._fan_out_streaming(prompt, round_number=1):
-            if isinstance(event, AgentResponse):
-                responses.append(event)
-                if self._report:
-                    self._report.save_agent_response(event)
-            else:
-                yield event
-
-        # Phase 2: Deduplicate findings
-        yield DebateEvent(type=EventType.DEDUP_START)
-        findings, stark_disagreements, dedup_raw = await self._deduplicate_findings(
-            prompt, responses
-        )
-        if self._report:
-            self._report.save_dedup(dedup_raw, findings, stark_disagreements)
-
-        yield DebateEvent(
-            type=EventType.DEDUP_COMPLETE,
+        trace = tracing.start_trace(
+            name="debate_run",
             metadata={
-                "findings_count": len(findings),
-                "disagreements_count": len(stark_disagreements),
+                "providers": [pc.agent_id for pc in self.config.providers],
+                "orchestrator_model": self.config.orchestrator_model,
+                "max_rounds": self.config.max_rounds,
+                "cwd": self.config.cwd,
             },
         )
 
-        # Phase 3: Optional targeted debate
-        debate_responses: list[AgentResponse] | None = None
-        if stark_disagreements and self.config.max_rounds > 0:
-            yield DebateEvent(type=EventType.TARGETED_DEBATE_START)
+        try:
+            # Phase 1: Independent analysis
+            yield DebateEvent(type=EventType.ROUND_START, round_number=1)
+            round1_span = tracing.start_span(trace, "round_1")
 
-            debate_responses = []
-            async for event in self._targeted_debate_streaming(
-                prompt, responses, stark_disagreements
+            responses: list[AgentResponse] = []
+            async for event in self._fan_out_streaming(
+                prompt, round_number=1, span=round1_span
             ):
                 if isinstance(event, AgentResponse):
-                    debate_responses.append(event)
+                    responses.append(event)
                     if self._report:
-                        self._report.save_debate_response(event)
+                        self._report.save_agent_response(event)
                 else:
                     yield event
 
-            # Re-deduplicate with debate responses included
-            all_responses = responses + debate_responses
+            tracing.end_span(round1_span)
+
+            # Phase 2: Deduplicate findings
+            yield DebateEvent(type=EventType.DEDUP_START)
+            dedup_span = tracing.start_span(trace, "dedup")
             findings, stark_disagreements, dedup_raw = (
-                await self._deduplicate_findings(prompt, all_responses)
+                await self._deduplicate_findings(prompt, responses, span=dedup_span)
+            )
+            tracing.end_span(dedup_span)
+
+            if self._report:
+                self._report.save_dedup(dedup_raw, findings, stark_disagreements)
+
+            yield DebateEvent(
+                type=EventType.DEDUP_COMPLETE,
+                metadata={
+                    "findings_count": len(findings),
+                    "disagreements_count": len(stark_disagreements),
+                },
             )
 
-        # Phase 4: Synthesis
-        yield DebateEvent(type=EventType.SYNTHESIS_START)
-        synthesis = await self._synthesize(
-            prompt, responses, findings, stark_disagreements, debate_responses
-        )
-        if self._report:
-            self._report.save_synthesis(synthesis)
-            self._report.finalize_readme(synthesis)
+            # Phase 3: Optional targeted debate
+            debate_responses: list[AgentResponse] | None = None
+            if stark_disagreements and self.config.max_rounds > 0:
+                yield DebateEvent(type=EventType.TARGETED_DEBATE_START)
+                debate_span = tracing.start_span(trace, "targeted_debate")
 
-        yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
+                debate_responses = []
+                async for event in self._targeted_debate_streaming(
+                    prompt, responses, stark_disagreements, span=debate_span
+                ):
+                    if isinstance(event, AgentResponse):
+                        debate_responses.append(event)
+                        if self._report:
+                            self._report.save_debate_response(event)
+                    else:
+                        yield event
+
+                # Re-deduplicate with debate responses included
+                re_dedup_span = tracing.start_span(trace, "re_dedup")
+                all_responses = responses + debate_responses
+                findings, stark_disagreements, dedup_raw = (
+                    await self._deduplicate_findings(
+                        prompt, all_responses, span=re_dedup_span
+                    )
+                )
+                tracing.end_span(re_dedup_span)
+                tracing.end_span(debate_span)
+
+            # Phase 4: Synthesis
+            yield DebateEvent(type=EventType.SYNTHESIS_START)
+            synthesis_span = tracing.start_span(trace, "synthesis")
+            synthesis = await self._synthesize(
+                prompt,
+                responses,
+                findings,
+                stark_disagreements,
+                debate_responses,
+                span=synthesis_span,
+            )
+            tracing.end_span(synthesis_span)
+
+            if self._report:
+                self._report.save_synthesis(synthesis)
+                self._report.finalize_readme(synthesis)
+
+            yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
+        finally:
+            tracing.end_trace(trace)
 
     async def _fan_out_streaming(
         self,
         prompt: str,
         round_number: int,
+        span: Any = None,
     ) -> AsyncIterator[DebateEvent | AgentResponse]:
         """Run all agents in parallel, yielding chunk and completion events."""
         queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
@@ -173,13 +211,22 @@ class Orchestrator:
                         )
                     )
 
+                content = "".join(chunks)
                 response = AgentResponse(
                     agent_id=agent_id,
                     provider=pc.provider,
                     model=pc.model,
                     round_number=round_number,
-                    content="".join(chunks),
+                    content=content,
                 )
+                if span is not None:
+                    tracing.log_generation(
+                        span,
+                        name=agent_id,
+                        model=pc.model,
+                        input=full_prompt,
+                        output=content,
+                    )
                 await queue.put(
                     DebateEvent(
                         type=EventType.AGENT_COMPLETED,
@@ -215,6 +262,7 @@ class Orchestrator:
         prompt: str,
         prior_responses: list[AgentResponse],
         disagreements: list[Disagreement],
+        span: Any = None,
     ) -> AsyncIterator[DebateEvent | AgentResponse]:
         """Run a single targeted debate round for stark disagreements."""
         queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
@@ -263,13 +311,22 @@ class Orchestrator:
                         )
                     )
 
+                content = "".join(chunks)
                 response = AgentResponse(
                     agent_id=agent_id,
                     provider=pc.provider,
                     model=pc.model,
                     round_number=2,
-                    content="".join(chunks),
+                    content=content,
                 )
+                if span is not None:
+                    tracing.log_generation(
+                        span,
+                        name=agent_id,
+                        model=pc.model,
+                        input=full_prompt,
+                        output=content,
+                    )
                 await queue.put(
                     DebateEvent(
                         type=EventType.AGENT_COMPLETED,
@@ -304,6 +361,7 @@ class Orchestrator:
         self,
         prompt: str,
         responses: list[AgentResponse],
+        span: Any = None,
     ) -> tuple[list[Finding], list[Disagreement], str]:
         """Use Claude to deduplicate findings and identify contradictions.
 
@@ -317,13 +375,31 @@ class Orchestrator:
             max_turns=1,
         )
 
+        usage_info: dict[str, int] | None = None
         async for message in query(prompt=detection_prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         result_chunks.append(block.text)
+                if hasattr(message, "usage") and message.usage is not None:
+                    u = message.usage
+                    usage_info = {
+                        "input_tokens": getattr(u, "input_tokens", 0),
+                        "output_tokens": getattr(u, "output_tokens", 0),
+                        "total_tokens": getattr(u, "input_tokens", 0)
+                        + getattr(u, "output_tokens", 0),
+                    }
 
         raw = "".join(result_chunks)
+        if span is not None:
+            tracing.log_generation(
+                span,
+                name="dedup_call",
+                model=self.config.orchestrator_model,
+                input=detection_prompt,
+                output=raw,
+                usage=usage_info,
+            )
         findings, disagreements = self._parse_dedup_response(raw)
         return findings, disagreements, raw
 
@@ -391,6 +467,7 @@ class Orchestrator:
         findings: list[Finding],
         disagreements: list[Disagreement],
         debate_responses: list[AgentResponse] | None = None,
+        span: Any = None,
     ) -> str:
         """Produce the final synthesis using Claude."""
         # Format findings for the synthesis prompt
@@ -417,10 +494,29 @@ class Orchestrator:
             max_turns=1,
         )
 
+        usage_info: dict[str, int] | None = None
         async for message in query(prompt=synthesis_prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         result_chunks.append(block.text)
+                if hasattr(message, "usage") and message.usage is not None:
+                    u = message.usage
+                    usage_info = {
+                        "input_tokens": getattr(u, "input_tokens", 0),
+                        "output_tokens": getattr(u, "output_tokens", 0),
+                        "total_tokens": getattr(u, "input_tokens", 0)
+                        + getattr(u, "output_tokens", 0),
+                    }
 
-        return "".join(result_chunks)
+        raw = "".join(result_chunks)
+        if span is not None:
+            tracing.log_generation(
+                span,
+                name="synthesis_call",
+                model=self.config.orchestrator_model,
+                input=synthesis_prompt,
+                output=raw,
+                usage=usage_info,
+            )
+        return raw
