@@ -70,27 +70,21 @@ Read the output and present it to the user. Done.
 
 Run the debate using Claude Code's built-in Task sub-agents. This is Claude-only but requires no dependencies.
 
-#### Phase 1: Gather Context
+#### Phase 1: Independent Analysis (Fan Out)
 
-Before fanning out, gather relevant context from the codebase to enrich the prompt:
+**IMPORTANT:** Do NOT gather context or research the codebase yourself before fanning out. The whole point of this tool is that each agent independently investigates the codebase with its own perspective. Pre-gathering context defeats this — the agents must do their own research using their own tools.
 
-1. Read any files the user referenced in their prompt
-2. If the prompt mentions recent changes, run `git log --oneline -10` and `git diff HEAD~1` to gather context
-3. If the prompt mentions a specific module/directory, use Glob to find relevant files and read key ones
-
-Build an **enriched prompt** that includes the user's original question plus the gathered context.
-
-#### Phase 2: Independent Analysis (Fan Out)
-
-Launch **3 Task sub-agents in parallel**, each with a different persona and model. All 3 Tasks MUST be launched in a single message to run in parallel.
+Launch **3 Task sub-agents in parallel**, each with a different persona and model. All 3 Tasks MUST be launched in a single message to run in parallel. Each agent has full access to the codebase and should investigate independently.
 
 **Agent 1 — Architect (opus):**
 ```
 You are a senior software architect. Focus on system design, scalability, maintainability, and long-term implications. Consider how components interact, where abstractions belong, and how the design will evolve.
 
-Analyze the following and provide your recommendation:
+Investigate the codebase and analyze the following:
 
-<enriched_prompt>
+<user_prompt>
+
+You have full access to the codebase. Read files, search for patterns, and trace code paths yourself. Do your own research — do not rely on pre-gathered context.
 
 Structure your response:
 ### Approach
@@ -109,36 +103,42 @@ Specific file changes, code patterns, or implementation steps.
 ```
 You are a pragmatic senior engineer. Focus on simplicity, shipping velocity, and avoiding over-engineering. Prefer concrete solutions over abstract frameworks. Challenge unnecessary complexity.
 
-[same structure as above with the enriched prompt]
+Investigate the codebase and analyze the following:
+
+<user_prompt>
+
+You have full access to the codebase. Read files, search for patterns, and trace code paths yourself. Do your own research — do not rely on pre-gathered context.
+
+[same structure as above]
 ```
 
 **Agent 3 — Reliability Engineer (haiku):**
 ```
 You are a reliability and security engineer. Focus on edge cases, failure modes, error handling, security vulnerabilities, observability, and operational concerns. Consider what happens when things go wrong.
 
-[same structure as above with the enriched prompt]
+Investigate the codebase and analyze the following:
+
+<user_prompt>
+
+You have full access to the codebase. Read files, search for patterns, and trace code paths yourself. Do your own research — do not rely on pre-gathered context.
+
+[same structure as above]
 ```
 
 Wait for all 3 agents to complete and collect their responses.
 
-#### Phase 2.5: Opening Arguments Checkpoint
+#### Phase 2: Opening Arguments Checkpoint (MANDATORY)
 
-Present the opening arguments to the user:
+**This checkpoint is MANDATORY. You MUST stop here and wait for the user's response before proceeding. Do NOT skip this step, even if the agents all agree.**
 
-```
-## Opening Arguments
-
-**Architect:** [brief summary of their position]
-**Pragmatist:** [brief summary of their position]
-**Reliability Engineer:** [brief summary of their position]
-```
-
-Then ask the user:
+Present each agent's FULL response to the user (not summaries — the complete text), then ask:
 
 > "Here are the opening arguments from all three agents. Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these responses sufficient?"
 
+**You MUST wait for the user to respond.** Do not continue to Phase 3 or Phase 5 on your own.
+
 **If the user wants to proceed**, continue to Phase 3.
-**If the user is satisfied**, skip to Phase 5 (Synthesis) using only the opening arguments.
+**If the user is satisfied**, stop. The opening arguments are the final output.
 
 #### Phase 3: Disagreement Detection
 
@@ -149,7 +149,7 @@ For each disagreement, note:
 2. Each agent's position
 3. A clarifying question that could resolve it
 
-**If no genuine disagreements exist**, skip to Phase 5.
+**If no genuine disagreements exist**, tell the user and ask if they want to proceed with synthesis or stop here.
 
 Present the disagreements to the user:
 
