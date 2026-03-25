@@ -13,6 +13,7 @@ from agent_debate.orchestrator import Orchestrator
 from agent_debate.types import (
     AgentResponse,
     DebateConfig,
+    DebateEvent,
     Disagreement,
     EventType,
     PositionUpdate,
@@ -242,3 +243,79 @@ class TestAgentIdDedup:
         assert orch._agent_id(0, config.providers[0]) == "claude:opus#1"
         assert orch._agent_id(1, config.providers[1]) == "claude:opus#2"
         assert orch._agent_id(2, config.providers[2]) == "claude:opus#3"
+
+
+class TestRunOpening:
+    @pytest.mark.anyio
+    async def test_yields_opening_complete_with_responses(self):
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+        fake = FakeProvider(["Response from agent"])
+        orchestrator._providers = {"claude": fake}
+
+        events = []
+        async for event in orchestrator.run_opening("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.ROUND_START in event_types
+        assert EventType.AGENT_STARTED in event_types
+        assert EventType.AGENT_CHUNK in event_types
+        assert EventType.AGENT_COMPLETED in event_types
+        assert EventType.OPENING_COMPLETE in event_types
+        assert event_types[-1] == EventType.OPENING_COMPLETE
+
+        opening_event = events[-1]
+        responses = opening_event.metadata["responses"]
+        assert len(responses) == 2
+        assert all(isinstance(r, AgentResponse) for r in responses)
+
+    @pytest.mark.anyio
+    async def test_agent_responses_not_yielded_directly(self):
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+        fake = FakeProvider(["Response"])
+        orchestrator._providers = {"claude": fake}
+
+        async for event in orchestrator.run_opening("test"):
+            assert isinstance(event, DebateEvent), (
+                f"run_opening() should only yield DebateEvent, got {type(event)}"
+            )
+
+    @pytest.mark.anyio
+    async def test_partial_failure_still_yields_opening_complete(self):
+        config = make_config(num_agents=2)
+        orchestrator = Orchestrator.__new__(Orchestrator)
+        orchestrator.config = config
+
+        call_count = 0
+
+        class FailingProvider:
+            id = "claude"
+            display_name = "Failing"
+
+            async def analyze(self, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise RuntimeError("Agent failed")
+                yield "Success"
+
+            def available(self):
+                return True
+
+        orchestrator._providers = {"claude": FailingProvider()}
+
+        events = []
+        async for event in orchestrator.run_opening("test"):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.ERROR in event_types
+        assert EventType.OPENING_COMPLETE in event_types
+
+        opening_event = [e for e in events if e.type == EventType.OPENING_COMPLETE][0]
+        responses = opening_event.metadata["responses"]
+        assert len(responses) == 1

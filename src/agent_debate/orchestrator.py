@@ -66,6 +66,27 @@ class Orchestrator:
             return f"{base}#{occurrence + 1}"
         return base
 
+    async def run_opening(self, prompt: str) -> AsyncIterator[DebateEvent]:
+        """Run the opening arguments phase: fan out to all agents, yield events.
+
+        Ends with an OPENING_COMPLETE event whose metadata["responses"]
+        contains the list of AgentResponse objects.
+        """
+        yield DebateEvent(type=EventType.ROUND_START, round_number=1)
+
+        responses: list[AgentResponse] = []
+        async for event in self._fan_out_streaming(prompt, round_number=1):
+            if isinstance(event, AgentResponse):
+                responses.append(event)
+            else:
+                yield event
+
+        yield DebateEvent(
+            type=EventType.OPENING_COMPLETE,
+            round_number=1,
+            metadata={"responses": responses},
+        )
+
     async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
         """Run the full debate loop, yielding events as they occur."""
         judge_resolution: str | None = None
