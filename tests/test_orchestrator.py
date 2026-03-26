@@ -457,3 +457,122 @@ class TestOpeningCompleteEvent:
         assert event.type == EventType.OPENING_COMPLETE
         assert len(event.metadata["responses"]) == 1
         assert event.metadata["responses"][0].agent_id == "a1"
+
+
+class TestRunOpening:
+    @pytest.mark.anyio
+    async def test_yields_streaming_events_then_opening_complete(self):
+        """run_opening() should yield agent streaming events, then OPENING_COMPLETE with responses."""
+        config = make_config(num_agents=2)
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+        fake = FakeProvider(["Response from agent"])
+        orch._providers = {"claude": fake}
+
+        events = []
+        async for event in orch.run_opening("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+        assert EventType.ROUND_START in event_types
+        assert EventType.AGENT_STARTED in event_types
+        assert EventType.AGENT_COMPLETED in event_types
+        assert event_types[-1] == EventType.OPENING_COMPLETE
+
+        # OPENING_COMPLETE carries responses
+        final = events[-1]
+        assert final.type == EventType.OPENING_COMPLETE
+        responses = final.metadata["responses"]
+        assert len(responses) == 2
+        assert all(isinstance(r, AgentResponse) for r in responses)
+
+    @pytest.mark.anyio
+    async def test_opening_complete_fires_even_with_agent_error(self):
+        """If an agent errors (timeout), OPENING_COMPLETE still fires with the remaining responses."""
+        config = DebateConfig(
+            providers=[
+                ProviderConfig("claude", "fast"),
+                ProviderConfig("claude", "slow"),
+            ],
+            max_rounds=0,
+            report_dir=None,
+            agent_timeout=1,
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+
+        fast_provider = FakeProvider(["Fast response"])
+        slow_provider = SlowProvider()
+
+        async def patched_fan_out(prompt, round_number, span=None):
+            """Use fast_provider for index 0, slow_provider for index 1."""
+            queue: asyncio.Queue = asyncio.Queue()
+            providers_map = {0: fast_provider, 1: slow_provider}
+
+            async def run_agent(index, pc):
+                provider = providers_map[index]
+                agent_id = orch._agent_id(index, pc)
+                from agent_debate.prompts import build_round1_prompt
+                full_prompt = build_round1_prompt(prompt)
+
+                await queue.put(
+                    DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
+                )
+                try:
+                    chunks = []
+                    async def _stream():
+                        async for chunk in provider.analyze(
+                            prompt=full_prompt, system_prompt="",
+                            cwd=orch.config.cwd, model=pc.model,
+                        ):
+                            chunks.append(chunk)
+                            await queue.put(DebateEvent(
+                                type=EventType.AGENT_CHUNK, agent_id=agent_id,
+                                round_number=round_number, content=chunk,
+                            ))
+                    await asyncio.wait_for(_stream(), timeout=orch.config.agent_timeout)
+                    content = "".join(chunks)
+                    response = AgentResponse(
+                        agent_id=agent_id, provider=pc.provider,
+                        model=pc.model, round_number=round_number, content=content,
+                    )
+                    await queue.put(DebateEvent(
+                        type=EventType.AGENT_COMPLETED, agent_id=agent_id,
+                        round_number=round_number,
+                    ))
+                    await queue.put(response)
+                except asyncio.TimeoutError:
+                    await queue.put(DebateEvent(
+                        type=EventType.ERROR, agent_id=agent_id,
+                        content=f"Agent timed out after {orch.config.agent_timeout}s",
+                    ))
+                finally:
+                    await queue.put(None)
+
+            for index, pc in enumerate(config.providers):
+                asyncio.create_task(run_agent(index, pc))
+
+            completed = 0
+            while completed < len(config.providers):
+                item = await queue.get()
+                if item is None:
+                    completed += 1
+                    continue
+                yield item
+
+        orch._fan_out_streaming = patched_fan_out  # type: ignore[assignment]
+
+        events = []
+        async for event in orch.run_opening("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+        assert event_types[-1] == EventType.OPENING_COMPLETE
+        assert EventType.ERROR in event_types
+        final = events[-1]
+        responses = final.metadata["responses"]
+        assert len(responses) == 1

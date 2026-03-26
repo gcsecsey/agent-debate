@@ -42,6 +42,7 @@ class Orchestrator:
         self.config = config
         self._providers: dict[str, BaseProvider] = {}
         self._report: ReportWriter | None = None
+        self._trace: Any = None
         self._init_providers()
 
     def _init_providers(self) -> None:
@@ -69,6 +70,48 @@ class Orchestrator:
             )
             return f"{base}#{occurrence + 1}"
         return base
+
+    async def run_opening(self, prompt: str) -> AsyncIterator[DebateEvent]:
+        """Run round 1 independent analysis, yielding streaming events.
+
+        Ends with an OPENING_COMPLETE event whose metadata["responses"]
+        contains the list of AgentResponse objects from all agents that succeeded.
+        """
+        # Set up report writer
+        if self.config.report_dir:
+            self._report = ReportWriter(self.config.report_dir, self.config.cwd)
+            self._report.start_run(prompt, self.config.providers)
+
+        self._trace = tracing.start_trace(
+            name="debate_run",
+            metadata={
+                "providers": [pc.agent_id for pc in self.config.providers],
+                "orchestrator_model": self.config.orchestrator_model,
+                "max_rounds": self.config.max_rounds,
+                "cwd": self.config.cwd,
+            },
+        )
+
+        yield DebateEvent(type=EventType.ROUND_START, round_number=1)
+        round1_span = tracing.start_span(self._trace, "round_1")
+
+        responses: list[AgentResponse] = []
+        async for event in self._fan_out_streaming(
+            prompt, round_number=1, span=round1_span
+        ):
+            if isinstance(event, AgentResponse):
+                responses.append(event)
+                if self._report:
+                    self._report.save_agent_response(event)
+            else:
+                yield event
+
+        tracing.end_span(round1_span)
+
+        yield DebateEvent(
+            type=EventType.OPENING_COMPLETE,
+            metadata={"responses": responses},
+        )
 
     async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
         """Run the full analysis loop, yielding events as they occur."""
