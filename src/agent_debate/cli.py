@@ -107,6 +107,7 @@ async def _run(
     orchestrator_model: str,
     report_dir: str | None,
     agent_timeout: int = 300,
+    max_parallel: int = 5,
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -116,6 +117,7 @@ async def _run(
         orchestrator_model=orchestrator_model,
         report_dir=report_dir,
         agent_timeout=agent_timeout,
+        max_parallel=max_parallel,
     )
 
     console.print(
@@ -245,6 +247,12 @@ def main() -> None:
     help="Timeout per agent call in seconds (default: 300)",
 )
 @click.option(
+    "--max-parallel",
+    default=5,
+    type=int,
+    help="Maximum concurrent agent calls (default: 5)",
+)
+@click.option(
     "--no-report",
     is_flag=True,
     default=False,
@@ -257,6 +265,7 @@ def run(
     cwd: str,
     orchestrator_model: str,
     timeout: int,
+    max_parallel: int,
     no_report: bool,
 ) -> None:
     """Run a multi-perspective analysis.
@@ -275,7 +284,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel
     )
 
 

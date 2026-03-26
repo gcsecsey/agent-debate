@@ -132,3 +132,40 @@ class TestProviderConfig:
     def test_agent_id_without_model(self):
         pc = ProviderConfig(provider="claude")
         assert pc.agent_id == "claude"
+
+
+class TestPersonaParsing:
+    def test_provider_with_persona(self):
+        result = parse_provider_string("claude:opus@security")
+        assert result.provider == "claude"
+        assert result.model == "opus"
+        assert result.persona == "security"
+
+    def test_provider_no_model_with_persona(self):
+        result = parse_provider_string("codex@performance")
+        assert result.provider == "codex"
+        assert result.model is None
+        assert result.persona == "performance"
+
+    def test_provider_without_persona(self):
+        result = parse_provider_string("claude:opus")
+        assert result.persona is None
+
+    def test_multiple_with_personas(self):
+        result = parse_providers_string(
+            "claude:opus@security,codex@performance,gemini@architecture"
+        )
+        assert len(result) == 3
+        assert result[0].persona == "security"
+        assert result[1].persona == "performance"
+        assert result[2].persona == "architecture"
+
+
+class TestMaxParallel:
+    def test_default(self):
+        config = build_config()
+        assert config.max_parallel == 5
+
+    def test_custom(self):
+        config = build_config(max_parallel=2)
+        assert config.max_parallel == 2

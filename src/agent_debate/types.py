@@ -38,6 +38,8 @@ class ProviderConfig:
 
     provider: str  # e.g. "claude", "codex", "gemini", "amp"
     model: str | None = None  # e.g. "opus", "sonnet", "o4-mini"
+    persona: str | None = None  # e.g. "security", "performance", "architecture"
+
     @property
     def agent_id(self) -> str:
         """Unique identifier for this agent."""
@@ -84,3 +86,4 @@ class DebateConfig:
     orchestrator_model: str = "sonnet"
     report_dir: str | None = ".context/debate"
     agent_timeout: int = 300  # seconds, per provider call
+    max_parallel: int = 5  # max concurrent agent calls
