@@ -75,23 +75,26 @@ class LiveDebateDisplay:
         self._status_panels.append(panel)
         self._update()
 
-    def print_agent_panels(self) -> None:
-        """Print full agent panels after Live context exits."""
+    SUMMARY_LINES = 8
+
+    def print_agent_summaries(self) -> None:
+        """Print a short summary (first paragraph) per agent."""
         for agent_id, buffer in self._agent_buffers.items():
             if not buffer.strip():
                 continue
             lines = buffer.strip().split("\n")
             total_lines = len(lines)
 
-            if total_lines > AGENT_PREVIEW_LINES:
-                visible = (
-                    lines[:15]
-                    + [f"\n  ... {total_lines - 25} lines hidden ...\n"]
-                    + lines[-10:]
-                )
-                display_text = "\n".join(visible)
-            else:
-                display_text = buffer.strip()
+            # Take first N non-empty lines as summary
+            summary_lines = []
+            for line in lines:
+                summary_lines.append(line)
+                if len(summary_lines) >= self.SUMMARY_LINES:
+                    break
+
+            display_text = "\n".join(summary_lines)
+            if total_lines > self.SUMMARY_LINES:
+                display_text += f"\n[dim]  ... {total_lines - self.SUMMARY_LINES} more lines[/dim]"
 
             console.print(
                 Panel(
@@ -100,6 +103,30 @@ class LiveDebateDisplay:
                     border_style="green",
                 )
             )
+
+    def print_agent_full(self, agent_id: str) -> None:
+        """Print the full response for a specific agent."""
+        buffer = self._agent_buffers.get(agent_id, "")
+        if not buffer.strip():
+            console.print(f"[dim]No response from {agent_id}[/dim]")
+            return
+        console.print(
+            Panel(
+                Markdown(buffer.strip()),
+                title=f"[bold]{agent_id}[/bold]",
+                border_style="green",
+            )
+        )
+
+    def print_all_agents_full(self) -> None:
+        """Print full responses for all agents."""
+        for agent_id in self._agent_buffers:
+            self.print_agent_full(agent_id)
+
+    @property
+    def agent_ids(self) -> list[str]:
+        """Return list of agent IDs that have responses."""
+        return [aid for aid, buf in self._agent_buffers.items() if buf.strip()]
 
     def _render(self) -> RenderableType:
         lines: list[str] = []
@@ -203,10 +230,10 @@ async def _run(
                         )
                     )
 
-    # Show full agent responses now that Live is done
-    display.print_agent_panels()
+    # Show short summaries
+    display.print_agent_summaries()
 
-    # Checkpoint: ask user whether to proceed
+    # Checkpoint
     if opening_only:
         console.print("\n[dim]Opening-only mode — debate skipped.[/dim]")
         _print_report_path(report_dir, orchestrator)
@@ -217,11 +244,31 @@ async def _run(
         _print_report_path(report_dir, orchestrator)
         return
 
-    proceed = click.confirm("\nProceed with debate?", default=True)
-    if not proceed:
-        console.print("[dim]Debate skipped.[/dim]")
-        _print_report_path(report_dir, orchestrator)
-        return
+    # Interactive menu
+    agent_ids = display.agent_ids
+    while True:
+        console.print()
+        console.print("[bold]Options:[/bold]")
+        console.print("  [bold]d[/bold] — proceed with [bold]d[/bold]ebate")
+        console.print("  [bold]v[/bold] — [bold]v[/bold]iew all full responses")
+        for i, aid in enumerate(agent_ids, 1):
+            console.print(f"  [bold]{i}[/bold] — expand [bold]{aid}[/bold]")
+        console.print("  [bold]q[/bold] — [bold]q[/bold]uit (debate skipped)")
+
+        choice = click.prompt("Choice", default="d").strip().lower()
+
+        if choice == "d":
+            break
+        elif choice == "v":
+            display.print_all_agents_full()
+        elif choice == "q":
+            console.print("[dim]Debate skipped.[/dim]")
+            _print_report_path(report_dir, orchestrator)
+            return
+        elif choice.isdigit() and 1 <= int(choice) <= len(agent_ids):
+            display.print_agent_full(agent_ids[int(choice) - 1])
+        else:
+            console.print("[red]Invalid choice[/red]")
 
     # Phase 2: Debate + synthesis
     synthesis_content = ""
