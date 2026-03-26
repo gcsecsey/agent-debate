@@ -113,6 +113,91 @@ class Orchestrator:
             metadata={"responses": responses},
         )
 
+    async def run_debate(
+        self, prompt: str, opening_responses: list[AgentResponse]
+    ) -> AsyncIterator[DebateEvent]:
+        """Run dedup, optional debate rounds, and synthesis.
+
+        Accepts the responses from run_opening(). If opening_responses is empty
+        or has only one agent, skips targeted debate and runs synthesis directly.
+        """
+        trace = self._trace or tracing.start_trace(
+            name="debate_run_phase2",
+            metadata={"phase": "debate"},
+        )
+        owns_trace = self._trace is None
+
+        try:
+            # Phase 2: Deduplicate findings
+            yield DebateEvent(type=EventType.DEDUP_START)
+            dedup_span = tracing.start_span(trace, "dedup")
+            findings, stark_disagreements, dedup_raw = (
+                await self._deduplicate_findings(prompt, opening_responses, span=dedup_span)
+            )
+            tracing.end_span(dedup_span)
+
+            if not findings and not stark_disagreements:
+                yield DebateEvent(
+                    type=EventType.ERROR,
+                    content="Dedup produced no findings — synthesis will work from raw agent responses",
+                    metadata={"phase": "dedup"},
+                )
+
+            if self._report:
+                self._report.save_dedup(dedup_raw, findings, stark_disagreements)
+
+            yield DebateEvent(
+                type=EventType.DEDUP_COMPLETE,
+                metadata={
+                    "findings_count": len(findings),
+                    "disagreements_count": len(stark_disagreements),
+                },
+            )
+
+            # Phase 3: Optional targeted debate
+            debate_responses: list[AgentResponse] | None = None
+            if (
+                stark_disagreements
+                and self.config.max_rounds > 0
+                and len(opening_responses) > 1
+            ):
+                yield DebateEvent(type=EventType.TARGETED_DEBATE_START)
+                debate_span = tracing.start_span(trace, "targeted_debate")
+
+                debate_responses = []
+                async for event in self._targeted_debate_streaming(
+                    prompt, opening_responses, stark_disagreements, span=debate_span
+                ):
+                    if isinstance(event, AgentResponse):
+                        debate_responses.append(event)
+                        if self._report:
+                            self._report.save_debate_response(event)
+                    else:
+                        yield event
+                tracing.end_span(debate_span)
+
+            # Phase 4: Synthesis
+            yield DebateEvent(type=EventType.SYNTHESIS_START)
+            synthesis_span = tracing.start_span(trace, "synthesis")
+            synthesis = await self._synthesize(
+                prompt,
+                opening_responses,
+                findings,
+                stark_disagreements,
+                debate_responses,
+                span=synthesis_span,
+            )
+            tracing.end_span(synthesis_span)
+
+            if self._report:
+                self._report.save_synthesis(synthesis)
+                self._report.finalize_readme(synthesis)
+
+            yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
+        finally:
+            if owns_trace:
+                tracing.end_trace(trace)
+
     async def run(self, prompt: str) -> AsyncIterator[DebateEvent]:
         """Run the full analysis loop, yielding events as they occur."""
         # Set up report writer

@@ -576,3 +576,80 @@ class TestRunOpening:
         final = events[-1]
         responses = final.metadata["responses"]
         assert len(responses) == 1
+
+
+class TestRunDebate:
+    @pytest.mark.anyio
+    async def test_runs_dedup_and_synthesis(self):
+        """run_debate() should run dedup + synthesis given opening responses."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+            AgentResponse(agent_id="a2", provider="claude", model="sonnet", round_number=1, content="resp2"),
+        ]
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Final synthesis content", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", responses):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.DEDUP_START in event_types
+        assert EventType.DEDUP_COMPLETE in event_types
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+    @pytest.mark.anyio
+    async def test_empty_responses_skips_to_synthesis(self):
+        """run_debate() with empty responses should skip debate and run synthesis directly."""
+        orch = _make_orchestrator()
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Synthesis from empty", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", []):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+    @pytest.mark.anyio
+    async def test_single_response_skips_debate(self):
+        """run_debate() with one response should skip targeted debate."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+        ]
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return json.dumps({
+                    "findings": [{"topic": "T", "description": "D", "agents": ["a1"], "severity": "important"}],
+                    "stark_disagreements": [{"topic": "X", "positions": {"a1": "yes"}}],
+                }), None
+            return "Single agent synthesis", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", responses):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.TARGETED_DEBATE_START not in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
