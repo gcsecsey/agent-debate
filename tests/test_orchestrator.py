@@ -14,6 +14,7 @@ from agent_debate.orchestrator import Orchestrator
 from agent_debate.types import (
     AgentResponse,
     DebateConfig,
+    DebateEvent,
     Disagreement,
     EventType,
     Finding,
@@ -433,3 +434,299 @@ class TestDedupRetry:
         )
         assert call_count == 1
         assert len(findings) == 1
+
+
+class TestOpeningCompleteEvent:
+    def test_opening_complete_event_type_exists(self):
+        """OPENING_COMPLETE should be a valid EventType."""
+        from agent_debate.types import EventType
+
+        assert EventType.OPENING_COMPLETE.value == "opening_complete"
+
+    def test_opening_complete_event_carries_responses(self):
+        """OPENING_COMPLETE event metadata should hold responses."""
+        from agent_debate.types import AgentResponse, DebateEvent, EventType
+
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+        ]
+        event = DebateEvent(
+            type=EventType.OPENING_COMPLETE,
+            metadata={"responses": responses},
+        )
+        assert event.type == EventType.OPENING_COMPLETE
+        assert len(event.metadata["responses"]) == 1
+        assert event.metadata["responses"][0].agent_id == "a1"
+
+
+class TestRunOpening:
+    @pytest.mark.anyio
+    async def test_yields_streaming_events_then_opening_complete(self):
+        """run_opening() should yield agent streaming events, then OPENING_COMPLETE with responses."""
+        config = make_config(num_agents=2)
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+        fake = FakeProvider(["Response from agent"])
+        orch._providers = {"claude": fake}
+
+        events = []
+        async for event in orch.run_opening("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+        assert EventType.ROUND_START in event_types
+        assert EventType.AGENT_STARTED in event_types
+        assert EventType.AGENT_COMPLETED in event_types
+        assert event_types[-1] == EventType.OPENING_COMPLETE
+
+        # OPENING_COMPLETE carries responses
+        final = events[-1]
+        assert final.type == EventType.OPENING_COMPLETE
+        responses = final.metadata["responses"]
+        assert len(responses) == 2
+        assert all(isinstance(r, AgentResponse) for r in responses)
+
+    @pytest.mark.anyio
+    async def test_opening_complete_fires_even_with_agent_error(self):
+        """If an agent errors (timeout), OPENING_COMPLETE still fires with the remaining responses."""
+        config = DebateConfig(
+            providers=[
+                ProviderConfig("claude", "fast"),
+                ProviderConfig("claude", "slow"),
+            ],
+            max_rounds=0,
+            report_dir=None,
+            agent_timeout=1,
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+
+        fast_provider = FakeProvider(["Fast response"])
+        slow_provider = SlowProvider()
+
+        async def patched_fan_out(prompt, round_number, span=None):
+            """Use fast_provider for index 0, slow_provider for index 1."""
+            queue: asyncio.Queue = asyncio.Queue()
+            providers_map = {0: fast_provider, 1: slow_provider}
+
+            async def run_agent(index, pc):
+                provider = providers_map[index]
+                agent_id = orch._agent_id(index, pc)
+                from agent_debate.prompts import build_round1_prompt
+                full_prompt = build_round1_prompt(prompt)
+
+                await queue.put(
+                    DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
+                )
+                try:
+                    chunks = []
+                    async def _stream():
+                        async for chunk in provider.analyze(
+                            prompt=full_prompt, system_prompt="",
+                            cwd=orch.config.cwd, model=pc.model,
+                        ):
+                            chunks.append(chunk)
+                            await queue.put(DebateEvent(
+                                type=EventType.AGENT_CHUNK, agent_id=agent_id,
+                                round_number=round_number, content=chunk,
+                            ))
+                    await asyncio.wait_for(_stream(), timeout=orch.config.agent_timeout)
+                    content = "".join(chunks)
+                    response = AgentResponse(
+                        agent_id=agent_id, provider=pc.provider,
+                        model=pc.model, round_number=round_number, content=content,
+                    )
+                    await queue.put(DebateEvent(
+                        type=EventType.AGENT_COMPLETED, agent_id=agent_id,
+                        round_number=round_number,
+                    ))
+                    await queue.put(response)
+                except asyncio.TimeoutError:
+                    await queue.put(DebateEvent(
+                        type=EventType.ERROR, agent_id=agent_id,
+                        content=f"Agent timed out after {orch.config.agent_timeout}s",
+                    ))
+                finally:
+                    await queue.put(None)
+
+            for index, pc in enumerate(config.providers):
+                asyncio.create_task(run_agent(index, pc))
+
+            completed = 0
+            while completed < len(config.providers):
+                item = await queue.get()
+                if item is None:
+                    completed += 1
+                    continue
+                yield item
+
+        orch._fan_out_streaming = patched_fan_out  # type: ignore[assignment]
+
+        events = []
+        async for event in orch.run_opening("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+        assert event_types[-1] == EventType.OPENING_COMPLETE
+        assert EventType.ERROR in event_types
+        final = events[-1]
+        responses = final.metadata["responses"]
+        assert len(responses) == 1
+
+
+class TestRunDebate:
+    @pytest.mark.anyio
+    async def test_runs_dedup_and_synthesis(self):
+        """run_debate() should run dedup + synthesis given opening responses."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+            AgentResponse(agent_id="a2", provider="claude", model="sonnet", round_number=1, content="resp2"),
+        ]
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Final synthesis content", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", responses):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.DEDUP_START in event_types
+        assert EventType.DEDUP_COMPLETE in event_types
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+    @pytest.mark.anyio
+    async def test_empty_responses_skips_to_synthesis(self):
+        """run_debate() with empty responses should skip debate and run synthesis directly."""
+        orch = _make_orchestrator()
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Synthesis from empty", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", []):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.SYNTHESIS_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+    @pytest.mark.anyio
+    async def test_single_response_skips_debate(self):
+        """run_debate() with one response should skip targeted debate."""
+        orch = _make_orchestrator()
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+        ]
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return json.dumps({
+                    "findings": [{"topic": "T", "description": "D", "agents": ["a1"], "severity": "important"}],
+                    "stark_disagreements": [{"topic": "X", "positions": {"a1": "yes"}}],
+                }), None
+            return "Single agent synthesis", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+        orch._trace = None
+
+        events = []
+        async for event in orch.run_debate("test prompt", responses):
+            events.append(event)
+
+        event_types = [e.type for e in events]
+        assert EventType.TARGETED_DEBATE_START not in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+
+class TestRunBackwardCompat:
+    @pytest.mark.anyio
+    async def test_run_chains_opening_and_debate(self):
+        """run() should yield all events from both phases, including OPENING_COMPLETE."""
+        config = make_config(num_agents=2)
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+        fake = FakeProvider(["Agent response content"])
+        orch._providers = {"claude": fake}
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Final synthesis", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        events = []
+        async for event in orch.run("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+
+        # Should contain events from both phases
+        assert EventType.ROUND_START in event_types
+        assert EventType.OPENING_COMPLETE in event_types
+        assert EventType.DEDUP_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
+
+
+class TestTwoPhaseIntegration:
+    @pytest.mark.anyio
+    async def test_opening_then_debate_produces_same_result_as_run(self):
+        """Calling run_opening() then run_debate() should produce the same events as run()."""
+        config = make_config(num_agents=2)
+
+        def make_orch():
+            orch = Orchestrator.__new__(Orchestrator)
+            orch.config = config
+            orch._report = None
+            orch._trace = None
+            fake = FakeProvider(["Agent response"])
+            orch._providers = {"claude": fake}
+
+            async def fake_call(prompt, model=None):
+                if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                    return VALID_DEDUP_JSON, None
+                return "Synthesis", None
+
+            orch._call_orchestrator = fake_call  # type: ignore[assignment]
+            return orch
+
+        # Collect events from run()
+        orch1 = make_orch()
+        run_events = []
+        async for event in orch1.run("test"):
+            if isinstance(event, DebateEvent):
+                run_events.append(event.type)
+
+        # Collect events from run_opening() + run_debate()
+        orch2 = make_orch()
+        split_events = []
+        responses = []
+        async for event in orch2.run_opening("test"):
+            if isinstance(event, DebateEvent):
+                split_events.append(event.type)
+            if isinstance(event, DebateEvent) and event.type == EventType.OPENING_COMPLETE:
+                responses = event.metadata["responses"]
+        async for event in orch2.run_debate("test", responses):
+            if isinstance(event, DebateEvent):
+                split_events.append(event.type)
+
+        assert run_events == split_events
