@@ -44,11 +44,13 @@ Run the opening arguments phase first using `--opening-only`:
 agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only
 ```
 
-Present the opening arguments output to the user and ask:
+Read the output and present a concise summary of each agent's position to the user.
 
-> "Here are the opening arguments from all agents. Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these responses sufficient?"
+Then use `AskUserQuestion` to ask:
 
-If the user wants to proceed, run the full analysis:
+> "Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these opening arguments sufficient?"
+
+If the user wants to proceed, run the full analysis (note: agents will re-run since the CLI is stateless):
 
 ```bash
 agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
