@@ -79,14 +79,17 @@ class LiveDebateDisplay:
 
     @staticmethod
     def _extract_tldr(content: str) -> str | None:
-        """Extract the TL;DR section from an agent response."""
+        """Extract the TL;DR section body from an agent response."""
         match = re.search(
-            r"###\s*TL;?DR\s*\n(.*?)(?=\n###|\Z)",
+            r"#{1,4}\s*TL;?DR\s*\n(.*?)(?=\n#{1,4}\s|\Z)",
             content,
             re.DOTALL | re.IGNORECASE,
         )
         if match:
-            return match.group(1).strip()
+            # Strip any remaining markdown heading lines from the body
+            body = match.group(1).strip()
+            lines = [l for l in body.split("\n") if not re.match(r"^#{1,4}\s", l)]
+            return "\n".join(lines).strip() or None
         return None
 
     def print_agent_summaries(self) -> None:
