@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import anyio
 import click
 from rich.console import Console, Group, RenderableType
@@ -75,31 +77,38 @@ class LiveDebateDisplay:
         self._status_panels.append(panel)
         self._update()
 
-    SUMMARY_LINES = 8
+    @staticmethod
+    def _extract_tldr(content: str) -> str | None:
+        """Extract the TL;DR section from an agent response."""
+        match = re.search(
+            r"###\s*TL;?DR\s*\n(.*?)(?=\n###|\Z)",
+            content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).strip()
+        return None
 
     def print_agent_summaries(self) -> None:
-        """Print a short summary (first paragraph) per agent."""
+        """Print the TL;DR from each agent, falling back to first few lines."""
         for agent_id, buffer in self._agent_buffers.items():
             if not buffer.strip():
                 continue
-            lines = buffer.strip().split("\n")
-            total_lines = len(lines)
 
-            # Take first N non-empty lines as summary
-            summary_lines = []
-            for line in lines:
-                summary_lines.append(line)
-                if len(summary_lines) >= self.SUMMARY_LINES:
-                    break
-
-            display_text = "\n".join(summary_lines)
-            if total_lines > self.SUMMARY_LINES:
-                display_text += f"\n[dim]  ... {total_lines - self.SUMMARY_LINES} more lines[/dim]"
+            tldr = self._extract_tldr(buffer)
+            if tldr:
+                display_text = tldr
+            else:
+                # Fallback: first 5 lines
+                lines = buffer.strip().split("\n")
+                display_text = "\n".join(lines[:5])
+                if len(lines) > 5:
+                    display_text += "\n[dim]  ...[/dim]"
 
             console.print(
                 Panel(
                     display_text,
-                    title=f"[bold]{agent_id}[/bold] [dim]({total_lines} lines)[/dim]",
+                    title=f"[bold]{agent_id}[/bold]",
                     border_style="green",
                 )
             )

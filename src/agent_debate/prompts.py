@@ -23,6 +23,9 @@ function names, and concrete implementation details where relevant.
 
 Structure your response with these sections:
 
+### TL;DR
+Your position in 2-3 sentences. What do you recommend and why? No hedging.
+
 ### Approach
 Your recommended approach in 2-3 paragraphs.
 
