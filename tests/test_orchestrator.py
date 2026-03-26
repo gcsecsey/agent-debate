@@ -142,6 +142,68 @@ class TestParseDedupResponse:
         assert disagreements == []
 
 
+class UnavailableProvider(FakeProvider):
+    """A mock provider that reports itself as unavailable."""
+
+    def available(self) -> bool:
+        return False
+
+
+class TestProviderDegradation:
+    def test_skips_unavailable_provider(self):
+        """Unavailable providers should be skipped, not crash."""
+        config = DebateConfig(
+            providers=[
+                ProviderConfig("claude", "opus"),
+                ProviderConfig("codex"),
+            ],
+            report_dir=None,
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._providers = {}
+
+        available = FakeProvider(["response"])
+        unavailable = UnavailableProvider(["never called"])
+
+        def fake_get_provider(name):
+            if name == "claude":
+                return lambda: available
+            return lambda: unavailable
+
+        with patch(
+            "agent_debate.orchestrator.get_provider",
+            side_effect=fake_get_provider,
+        ):
+            orch._init_providers()
+
+        assert "claude" in orch._providers
+        assert "codex" not in orch._providers
+        # Config should be trimmed to only available providers
+        assert len(orch.config.providers) == 1
+        assert orch.config.providers[0].provider == "claude"
+
+    def test_all_unavailable_raises(self):
+        """If zero providers are available, should raise RuntimeError."""
+        config = DebateConfig(
+            providers=[
+                ProviderConfig("codex"),
+            ],
+            report_dir=None,
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._providers = {}
+
+        unavailable = UnavailableProvider(["never called"])
+        with patch(
+            "agent_debate.orchestrator.get_provider",
+            return_value=lambda: unavailable,
+        ):
+            with pytest.raises(RuntimeError, match="No providers available"):
+                orch._init_providers()
+
+
 class TestAgentIdDedup:
     def test_unique_ids(self):
         config = DebateConfig(

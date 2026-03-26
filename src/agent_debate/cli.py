@@ -196,6 +196,20 @@ async def _run(
         agent_timeout=agent_timeout,
     )
 
+    requested_agents = {c.agent_id for c in config.providers}
+    orchestrator = Orchestrator(config)
+    active_agents = {c.agent_id for c in config.providers}
+
+    skipped = requested_agents - active_agents
+    if skipped:
+        console.print(
+            Panel(
+                f"[bold yellow]Skipped unavailable providers:[/bold yellow] {', '.join(sorted(skipped))}\n"
+                f"[dim]Continuing with: {', '.join(sorted(active_agents))}[/dim]",
+                border_style="yellow",
+            )
+        )
+
     console.print(
         Panel(
             f"[bold]Prompt:[/bold] {prompt}\n"
@@ -206,7 +220,6 @@ async def _run(
         )
     )
 
-    orchestrator = Orchestrator(config)
     display = LiveDebateDisplay()
 
     # Phase 1: Opening arguments
