@@ -99,6 +99,13 @@ class LiveDebateDisplay:
             self._live.update(self._render())
 
 
+def _print_report_path(report_dir: str | None, orchestrator: Orchestrator) -> None:
+    if report_dir and orchestrator._report:
+        console.print(
+            f"\n[dim]Full report saved to: {orchestrator._report.run_dir}[/dim]"
+        )
+
+
 async def _run(
     prompt: str,
     providers: str,
@@ -107,6 +114,7 @@ async def _run(
     orchestrator_model: str,
     report_dir: str | None,
     agent_timeout: int = 300,
+    opening_only: bool = False,
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -131,8 +139,10 @@ async def _run(
     orchestrator = Orchestrator(config)
     display = LiveDebateDisplay()
 
+    # Phase 1: Opening arguments
+    opening_responses: list[AgentResponse] = []
     with display.start():
-        async for event in orchestrator.run(prompt):
+        async for event in orchestrator.run_opening(prompt):
             if isinstance(event, AgentResponse):
                 continue
 
@@ -148,42 +158,8 @@ async def _run(
                     display.agent_chunk(event.agent_id or "unknown", event.content)
                 case EventType.AGENT_COMPLETED:
                     display.agent_completed(event.agent_id or "unknown")
-                case EventType.DEDUP_START:
-                    display.clear_agents()
-                    display.set_phase(
-                        "Phase 2: Deduplicating Findings",
-                        style="yellow",
-                    )
-                case EventType.DEDUP_COMPLETE:
-                    fc = event.metadata.get("findings_count", 0)
-                    dc = event.metadata.get("disagreements_count", 0)
-                    display.add_static(
-                        Panel(
-                            f"[bold]{fc} findings[/bold] extracted, "
-                            f"[bold]{dc} stark disagreement(s)[/bold]",
-                            title="[bold yellow]Deduplication Complete[/bold yellow]",
-                            border_style="yellow",
-                        )
-                    )
-                case EventType.TARGETED_DEBATE_START:
-                    display.clear_agents()
-                    display.set_phase(
-                        "Phase 3: Targeted Debate (stark disagreements found)",
-                        style="cyan",
-                    )
-                case EventType.SYNTHESIS_START:
-                    display.clear_agents()
-                    display.add_static(
-                        Panel("[bold]Synthesizing results...[/bold]", style="magenta")
-                    )
-                case EventType.SYNTHESIS_COMPLETE:
-                    display.add_static(
-                        Panel(
-                            Markdown(event.content),
-                            title="[bold magenta]Final Synthesis[/bold magenta]",
-                            border_style="magenta",
-                        )
-                    )
+                case EventType.OPENING_COMPLETE:
+                    opening_responses = event.metadata["responses"]
                 case EventType.ERROR:
                     display.add_static(
                         Panel(
@@ -193,10 +169,82 @@ async def _run(
                         )
                     )
 
-    if report_dir and orchestrator._report:
-        console.print(
-            f"\n[dim]Full report saved to: {orchestrator._report.run_dir}[/dim]"
-        )
+    # Checkpoint: ask user whether to proceed
+    if opening_only:
+        console.print("\n[dim]Opening-only mode — debate skipped.[/dim]")
+        _print_report_path(report_dir, orchestrator)
+        return
+
+    if not opening_responses:
+        console.print("\n[bold red]No agents responded — nothing to debate.[/bold red]")
+        _print_report_path(report_dir, orchestrator)
+        return
+
+    proceed = click.confirm("\nProceed with debate?", default=True)
+    if not proceed:
+        console.print("[dim]Debate skipped.[/dim]")
+        _print_report_path(report_dir, orchestrator)
+        return
+
+    # Phase 2: Debate + synthesis
+    display2 = LiveDebateDisplay()
+    with display2.start():
+        async for event in orchestrator.run_debate(prompt, opening_responses):
+            if isinstance(event, AgentResponse):
+                continue
+
+            match event.type:
+                case EventType.DEDUP_START:
+                    display2.set_phase(
+                        "Phase 2: Deduplicating Findings",
+                        style="yellow",
+                    )
+                case EventType.DEDUP_COMPLETE:
+                    fc = event.metadata.get("findings_count", 0)
+                    dc = event.metadata.get("disagreements_count", 0)
+                    display2.add_static(
+                        Panel(
+                            f"[bold]{fc} findings[/bold] extracted, "
+                            f"[bold]{dc} stark disagreement(s)[/bold]",
+                            title="[bold yellow]Deduplication Complete[/bold yellow]",
+                            border_style="yellow",
+                        )
+                    )
+                case EventType.TARGETED_DEBATE_START:
+                    display2.clear_agents()
+                    display2.set_phase(
+                        "Phase 3: Targeted Debate (stark disagreements found)",
+                        style="cyan",
+                    )
+                case EventType.AGENT_STARTED:
+                    display2.agent_started(event.agent_id or "unknown")
+                case EventType.AGENT_CHUNK:
+                    display2.agent_chunk(event.agent_id or "unknown", event.content)
+                case EventType.AGENT_COMPLETED:
+                    display2.agent_completed(event.agent_id or "unknown")
+                case EventType.SYNTHESIS_START:
+                    display2.clear_agents()
+                    display2.add_static(
+                        Panel("[bold]Synthesizing results...[/bold]", style="magenta")
+                    )
+                case EventType.SYNTHESIS_COMPLETE:
+                    display2.add_static(
+                        Panel(
+                            Markdown(event.content),
+                            title="[bold magenta]Final Synthesis[/bold magenta]",
+                            border_style="magenta",
+                        )
+                    )
+                case EventType.ERROR:
+                    display2.add_static(
+                        Panel(
+                            f"[bold red]{event.content}[/bold red]",
+                            title=f"Error ({event.agent_id or 'unknown'})",
+                            border_style="red",
+                        )
+                    )
+
+    _print_report_path(report_dir, orchestrator)
 
 
 @click.group()
@@ -250,6 +298,12 @@ def main() -> None:
     default=False,
     help="Disable saving the markdown report",
 )
+@click.option(
+    "--opening-only",
+    is_flag=True,
+    default=False,
+    help="Run only the opening arguments phase (skip debate)",
+)
 def run(
     prompt: str,
     providers: str,
@@ -258,6 +312,7 @@ def run(
     orchestrator_model: str,
     timeout: int,
     no_report: bool,
+    opening_only: bool,
 ) -> None:
     """Run a multi-perspective analysis.
 
@@ -275,7 +330,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, opening_only
     )
 
 
