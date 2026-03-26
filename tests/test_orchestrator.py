@@ -14,6 +14,7 @@ from agent_debate.orchestrator import Orchestrator
 from agent_debate.types import (
     AgentResponse,
     DebateConfig,
+    DebateEvent,
     Disagreement,
     EventType,
     Finding,
@@ -433,3 +434,26 @@ class TestDedupRetry:
         )
         assert call_count == 1
         assert len(findings) == 1
+
+
+class TestOpeningCompleteEvent:
+    def test_opening_complete_event_type_exists(self):
+        """OPENING_COMPLETE should be a valid EventType."""
+        from agent_debate.types import EventType
+
+        assert EventType.OPENING_COMPLETE.value == "opening_complete"
+
+    def test_opening_complete_event_carries_responses(self):
+        """OPENING_COMPLETE event metadata should hold responses."""
+        from agent_debate.types import AgentResponse, DebateEvent, EventType
+
+        responses = [
+            AgentResponse(agent_id="a1", provider="claude", model="opus", round_number=1, content="resp1"),
+        ]
+        event = DebateEvent(
+            type=EventType.OPENING_COMPLETE,
+            metadata={"responses": responses},
+        )
+        assert event.type == EventType.OPENING_COMPLETE
+        assert len(event.metadata["responses"]) == 1
+        assert event.metadata["responses"][0].agent_id == "a1"
