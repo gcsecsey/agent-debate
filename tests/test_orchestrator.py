@@ -653,3 +653,35 @@ class TestRunDebate:
         event_types = [e.type for e in events]
         assert EventType.TARGETED_DEBATE_START not in event_types
         assert EventType.SYNTHESIS_COMPLETE in event_types
+
+
+class TestRunBackwardCompat:
+    @pytest.mark.anyio
+    async def test_run_chains_opening_and_debate(self):
+        """run() should yield all events from both phases, including OPENING_COMPLETE."""
+        config = make_config(num_agents=2)
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+        fake = FakeProvider(["Agent response content"])
+        orch._providers = {"claude": fake}
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                return VALID_DEDUP_JSON, None
+            return "Final synthesis", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        events = []
+        async for event in orch.run("test prompt"):
+            events.append(event)
+
+        event_types = [e.type for e in events if isinstance(e, DebateEvent)]
+
+        # Should contain events from both phases
+        assert EventType.ROUND_START in event_types
+        assert EventType.OPENING_COMPLETE in event_types
+        assert EventType.DEDUP_START in event_types
+        assert EventType.SYNTHESIS_COMPLETE in event_types
