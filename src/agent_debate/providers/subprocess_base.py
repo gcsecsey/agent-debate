@@ -20,7 +20,7 @@ class SubprocessProvider(BaseProvider):
 
     command: str  # CLI binary name, e.g. "codex", "gemini", "amp"
     uses_stdin: bool = False  # Whether prompt is delivered via stdin vs file ref
-    idle_timeout: int = 60  # Kill agent if no output for this many seconds
+    idle_timeout: int = 30  # Kill agent if no output for this many seconds
 
     def build_args(
         self,
