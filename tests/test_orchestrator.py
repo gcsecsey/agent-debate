@@ -685,3 +685,48 @@ class TestRunBackwardCompat:
         assert EventType.OPENING_COMPLETE in event_types
         assert EventType.DEDUP_START in event_types
         assert EventType.SYNTHESIS_COMPLETE in event_types
+
+
+class TestTwoPhaseIntegration:
+    @pytest.mark.anyio
+    async def test_opening_then_debate_produces_same_result_as_run(self):
+        """Calling run_opening() then run_debate() should produce the same events as run()."""
+        config = make_config(num_agents=2)
+
+        def make_orch():
+            orch = Orchestrator.__new__(Orchestrator)
+            orch.config = config
+            orch._report = None
+            orch._trace = None
+            fake = FakeProvider(["Agent response"])
+            orch._providers = {"claude": fake}
+
+            async def fake_call(prompt, model=None):
+                if "deduplicate" in prompt.lower() or "findings" in prompt.lower():
+                    return VALID_DEDUP_JSON, None
+                return "Synthesis", None
+
+            orch._call_orchestrator = fake_call  # type: ignore[assignment]
+            return orch
+
+        # Collect events from run()
+        orch1 = make_orch()
+        run_events = []
+        async for event in orch1.run("test"):
+            if isinstance(event, DebateEvent):
+                run_events.append(event.type)
+
+        # Collect events from run_opening() + run_debate()
+        orch2 = make_orch()
+        split_events = []
+        responses = []
+        async for event in orch2.run_opening("test"):
+            if isinstance(event, DebateEvent):
+                split_events.append(event.type)
+            if isinstance(event, DebateEvent) and event.type == EventType.OPENING_COMPLETE:
+                responses = event.metadata["responses"]
+        async for event in orch2.run_debate("test", responses):
+            if isinstance(event, DebateEvent):
+                split_events.append(event.type)
+
+        assert run_events == split_events
