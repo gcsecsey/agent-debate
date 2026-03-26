@@ -50,7 +50,11 @@ class Orchestrator:
         unavailable: list[str] = []
         for pc in self.config.providers:
             if pc.provider not in self._providers:
-                provider_cls = get_provider(pc.provider)
+                try:
+                    provider_cls = get_provider(pc.provider)
+                except ValueError:
+                    unavailable.append(pc.agent_id)
+                    continue
                 provider = provider_cls()
                 if not provider.available():
                     unavailable.append(pc.agent_id)

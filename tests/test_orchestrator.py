@@ -203,6 +203,33 @@ class TestProviderDegradation:
             with pytest.raises(RuntimeError, match="No providers available"):
                 orch._init_providers()
 
+    def test_unknown_provider_skipped(self):
+        """Unknown provider names should be skipped, not crash."""
+        config = DebateConfig(
+            providers=[
+                ProviderConfig("claude", "opus"),
+                ProviderConfig("google"),  # not a real provider
+            ],
+            report_dir=None,
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._providers = {}
+
+        available = FakeProvider(["response"])
+
+        with patch(
+            "agent_debate.orchestrator.get_provider",
+            side_effect=lambda name: (
+                (lambda: available) if name == "claude"
+                else (_ for _ in ()).throw(ValueError(f"Unknown provider '{name}'"))
+            ),
+        ):
+            orch._init_providers()
+
+        assert "claude" in orch._providers
+        assert len(orch.config.providers) == 1
+
 
 class TestAgentIdDedup:
     def test_unique_ids(self):
