@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import anyio
 import click
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from .config import MODEL_GROUPS, build_config
 from .orchestrator import Orchestrator
@@ -20,11 +21,21 @@ AGENT_PREVIEW_LINES = 30
 
 
 class LiveDebateDisplay:
-    """Manages a Rich Live display with per-agent streaming panels."""
+    """Manages a Rich Live display that stays compact and updates in-place.
+
+    During streaming, shows a single panel with one status line per agent
+    (agent name, status, line count). This keeps the Live area small so
+    Rich can redraw it without terminal scrolling issues.
+
+    Full agent output is printed after the Live context exits.
+    """
 
     def __init__(self) -> None:
         self._agent_buffers: dict[str, str] = {}
         self._agent_status: dict[str, str] = {}
+        self._phase: str | None = None
+        self._phase_style: str = "blue"
+        self._status_panels: list[Panel] = []
         self._live: Live | None = None
 
     def start(self) -> Live:
@@ -32,12 +43,13 @@ class LiveDebateDisplay:
             self._render(),
             console=console,
             refresh_per_second=4,
-            vertical_overflow="visible",
         )
         return self._live
 
     def set_phase(self, text: str, style: str = "blue") -> None:
-        self._flush_static(Panel(f"[bold]{text}[/bold]", style=style))
+        self._phase = text
+        self._phase_style = style
+        self._update()
 
     def agent_started(self, agent_id: str) -> None:
         self._agent_buffers[agent_id] = ""
@@ -58,41 +70,63 @@ class LiveDebateDisplay:
         self._agent_status.clear()
         self._update()
 
-    def add_static(self, panel: Panel) -> None:
-        self._flush_static(panel)
+    def add_status(self, panel: Panel) -> None:
+        """Add a status panel (e.g. dedup results) to the live display."""
+        self._status_panels.append(panel)
+        self._update()
 
-    def _flush_static(self, panel: Panel) -> None:
-        if self._live is not None:
-            self._live.console.print(panel)
-
-    def _render(self) -> Group:
-        renderables = []
+    def print_agent_panels(self) -> None:
+        """Print full agent panels after Live context exits."""
         for agent_id, buffer in self._agent_buffers.items():
-            status = self._agent_status.get(agent_id, "streaming")
+            if not buffer.strip():
+                continue
             lines = buffer.strip().split("\n")
             total_lines = len(lines)
-
-            if status == "streaming":
-                border = "cyan"
-                suffix = f" [dim]streaming... ({total_lines} lines)[/dim]"
-            else:
-                border = "green"
-                suffix = f" [dim]({total_lines} lines)[/dim]"
 
             if total_lines > AGENT_PREVIEW_LINES:
                 visible = (
                     lines[:15]
-                    + [f"\n  [dim]... {total_lines - 25} lines hidden ...[/dim]\n"]
+                    + [f"\n  ... {total_lines - 25} lines hidden ...\n"]
                     + lines[-10:]
                 )
                 display_text = "\n".join(visible)
             else:
                 display_text = buffer.strip()
 
-            title = f"[bold]{agent_id}[/bold]{suffix}"
-            renderables.append(Panel(display_text, title=title, border_style=border))
+            console.print(
+                Panel(
+                    display_text,
+                    title=f"[bold]{agent_id}[/bold] [dim]({total_lines} lines)[/dim]",
+                    border_style="green",
+                )
+            )
 
-        return Group(*renderables)
+    def _render(self) -> RenderableType:
+        lines: list[str] = []
+
+        for agent_id in self._agent_buffers:
+            status = self._agent_status.get(agent_id, "streaming")
+            buffer = self._agent_buffers[agent_id]
+            line_count = len(buffer.strip().split("\n")) if buffer.strip() else 0
+
+            if status == "streaming":
+                icon = "[cyan]...[/cyan]"
+                count = f"[dim]{line_count} lines[/dim]" if line_count else "[dim]waiting[/dim]"
+            else:
+                icon = "[green]done[/green]"
+                count = f"[dim]{line_count} lines[/dim]"
+
+            lines.append(f"  {icon}  [bold]{agent_id}[/bold]  {count}")
+
+        for panel in self._status_panels:
+            lines.append("")
+            # Extract text content from status panels
+            if hasattr(panel, "renderable"):
+                lines.append(f"  {panel.renderable}")
+
+        body = "\n".join(lines) if lines else "  [dim]Starting...[/dim]"
+        title = f"[bold]{self._phase}[/bold]" if self._phase else "[bold]Working...[/bold]"
+        return Panel(body, title=title, border_style=self._phase_style)
 
     def _update(self) -> None:
         if self._live is not None:
@@ -161,13 +195,16 @@ async def _run(
                 case EventType.OPENING_COMPLETE:
                     opening_responses = event.metadata["responses"]
                 case EventType.ERROR:
-                    display.add_static(
+                    display.add_status(
                         Panel(
                             f"[bold red]{event.content}[/bold red]",
                             title=f"Error ({event.agent_id or 'unknown'})",
                             border_style="red",
                         )
                     )
+
+    # Show full agent responses now that Live is done
+    display.print_agent_panels()
 
     # Checkpoint: ask user whether to proceed
     if opening_only:
@@ -187,6 +224,7 @@ async def _run(
         return
 
     # Phase 2: Debate + synthesis
+    synthesis_content = ""
     display2 = LiveDebateDisplay()
     with display2.start():
         async for event in orchestrator.run_debate(prompt, opening_responses):
@@ -202,7 +240,7 @@ async def _run(
                 case EventType.DEDUP_COMPLETE:
                     fc = event.metadata.get("findings_count", 0)
                     dc = event.metadata.get("disagreements_count", 0)
-                    display2.add_static(
+                    display2.add_status(
                         Panel(
                             f"[bold]{fc} findings[/bold] extracted, "
                             f"[bold]{dc} stark disagreement(s)[/bold]",
@@ -224,25 +262,30 @@ async def _run(
                     display2.agent_completed(event.agent_id or "unknown")
                 case EventType.SYNTHESIS_START:
                     display2.clear_agents()
-                    display2.add_static(
-                        Panel("[bold]Synthesizing results...[/bold]", style="magenta")
+                    display2.set_phase(
+                        "Synthesizing results...",
+                        style="magenta",
                     )
                 case EventType.SYNTHESIS_COMPLETE:
-                    display2.add_static(
-                        Panel(
-                            Markdown(event.content),
-                            title="[bold magenta]Final Synthesis[/bold magenta]",
-                            border_style="magenta",
-                        )
-                    )
+                    synthesis_content = event.content
                 case EventType.ERROR:
-                    display2.add_static(
+                    display2.add_status(
                         Panel(
                             f"[bold red]{event.content}[/bold red]",
                             title=f"Error ({event.agent_id or 'unknown'})",
                             border_style="red",
                         )
                     )
+
+    # Print synthesis after Live context exits so it stays on screen
+    if synthesis_content:
+        console.print(
+            Panel(
+                Markdown(synthesis_content),
+                title="[bold magenta]Final Synthesis[/bold magenta]",
+                border_style="magenta",
+            )
+        )
 
     _print_report_path(report_dir, orchestrator)
 
