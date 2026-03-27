@@ -73,3 +73,58 @@ def test_load_debate_returns_full_json(tmp_path: Path) -> None:
 def test_load_debate_returns_none_for_missing(tmp_path: Path) -> None:
     data = load_debate(str(tmp_path), "nonexistent")
     assert data is None
+
+
+import threading
+import urllib.request
+import urllib.error
+
+from agent_debate.server import start_server
+
+
+def _start_test_server(cwd: str, port: int = 0) -> tuple:
+    """Start a server in a background thread, return (server, port, thread)."""
+    server = start_server(cwd, port=port, open_browser=False)
+    actual_port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    return server, actual_port, thread
+
+
+def test_api_debates_returns_json(tmp_path: Path) -> None:
+    _setup_debates(tmp_path, count=2)
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/api/debates"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read())
+            assert len(data) == 2
+    finally:
+        server.shutdown()
+
+
+def test_api_debate_detail_returns_full_json(tmp_path: Path) -> None:
+    dirs = _setup_debates(tmp_path, count=1)
+    ts = dirs[0].name
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/api/debates/{ts}"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read())
+            assert data["version"] == 1
+    finally:
+        server.shutdown()
+
+
+def test_api_debate_detail_404_for_missing(tmp_path: Path) -> None:
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/api/debates/nonexistent"
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(url)
+        assert exc_info.value.code == 404
+    finally:
+        server.shutdown()
