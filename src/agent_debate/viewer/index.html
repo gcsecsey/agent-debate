@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>agent-debate</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #0a0a0a;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 0 16px;
+    }
+
+    #app {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 48px 0 80px;
+    }
+
+    /* Landing page */
+    .landing-header {
+      margin-bottom: 32px;
+    }
+
+    .landing-header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #fff;
+    }
+
+    .landing-header p {
+      font-size: 15px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    /* Debate list */
+    .debate-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .debate-card {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 16px 20px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .debate-card:hover {
+      background: #1a1a1a;
+      border-color: #333;
+    }
+
+    .debate-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 16px;
+    }
+
+    .debate-prompt {
+      font-size: 15px;
+      font-weight: 500;
+      color: #e0e0e0;
+      line-height: 1.4;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .debate-time {
+      font-size: 12px;
+      color: #555;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .debate-card-bottom {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .provider-badge {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 2px 9px;
+      border-radius: 20px;
+      border: 1px solid transparent;
+      line-height: 1.6;
+    }
+
+    .disagreement-count {
+      font-size: 12px;
+      margin-left: 4px;
+    }
+
+    .disagreement-count.has-disagreements {
+      color: #f59e0b;
+    }
+
+    .disagreement-count.no-disagreements {
+      color: #10b981;
+    }
+
+    /* Empty / error states */
+    .state-message {
+      text-align: center;
+      padding: 80px 20px;
+      color: #555;
+    }
+
+    .state-message p {
+      font-size: 16px;
+      margin-bottom: 12px;
+      color: #666;
+    }
+
+    .state-message code {
+      font-family: monospace;
+      font-size: 13px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 8px 16px;
+      display: inline-block;
+      color: #888;
+    }
+
+    .error-message {
+      text-align: center;
+      padding: 60px 20px;
+      color: #ef4444;
+      font-size: 15px;
+    }
+
+    /* Loading skeleton */
+    .loading-indicator {
+      text-align: center;
+      padding: 60px 20px;
+      color: #444;
+      font-size: 14px;
+    }
+
+    /* ===== Transcript view ===== */
+
+    .header {
+      background: #111;
+      border-bottom: 1px solid #222;
+      padding: 20px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+      max-width: 70%;
+      margin-top: 6px;
+    }
+
+    .header .meta {
+      font-size: 12px;
+      opacity: 0.5;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .badge {
+      padding: 2px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: monospace;
+      font-weight: 500;
+    }
+
+    .back-link {
+      color: #666;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .back-link:hover {
+      color: #999;
+    }
+
+    /* Phase nav */
+    .phase-nav {
+      display: flex;
+      gap: 0;
+      background: #111;
+      border-bottom: 1px solid #222;
+      padding: 0 32px;
+      position: sticky;
+      top: 73px;
+      z-index: 99;
+    }
+
+    .phase-nav a {
+      padding: 10px 20px;
+      color: #888;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+
+    .phase-nav a:hover {
+      color: #ccc;
+    }
+
+    .phase-nav a.active {
+      color: #fff;
+      border-bottom-color: #3b82f6;
+    }
+
+    .phase-nav a.disabled {
+      color: #444;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .content {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+    }
+
+    .phase {
+      margin-bottom: 48px;
+    }
+
+    .phase-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #666;
+      margin-bottom: 20px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1a1a1a;
+    }
+
+    /* Agent cards (opening) */
+    .agent-card {
+      background: #111;
+      border: 1px solid #1e1e1e;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .agent-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 20px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+
+    .agent-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .agent-name {
+      font-size: 14px;
+      font-weight: 600;
+      font-family: monospace;
+    }
+
+    .agent-card-body {
+      padding: 20px;
+      font-size: 14px;
+      color: #bbb;
+    }
+
+    .agent-card-body h4 { color: #ddd; font-size: 14px; margin: 16px 0 8px; }
+    .agent-card-body h4:first-child { margin-top: 0; }
+    .agent-card-body p { margin-bottom: 8px; }
+    .agent-card-body ul { margin: 4px 0 8px 20px; }
+    .agent-card-body li { margin-bottom: 4px; }
+    .persona-badge {
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: capitalize;
+      color: #888;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid #333;
+      padding: 1px 8px;
+      border-radius: 3px;
+      margin-left: 8px;
+    }
+    .persona-help {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      color: #666;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: help;
+      margin-left: 2px;
+      vertical-align: middle;
+      position: relative;
+    }
+    .persona-help:hover {
+      background: rgba(255,255,255,0.2);
+      color: #ccc;
+    }
+
+    .expand-toggle {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 12px;
+      transition: all 0.15s;
+    }
+    .expand-toggle:hover {
+      border-color: #555;
+      color: #ccc;
+    }
+
+    /* Analysis: findings table */
+    .findings-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 24px;
+    }
+
+    .findings-table th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #151515;
+      color: #888;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #222;
+    }
+
+    .findings-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1a1a1a;
+      vertical-align: top;
+    }
+
+    .severity-critical { color: #ef4444; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    .severity-important { color: #f59e0b; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    .severity-minor { color: #6b7280; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+
+    /* Analysis: disagreements */
+    .disagreement {
+      background: rgba(239,68,68,0.05);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+    }
+
+    .disagreement-title-heading {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ef4444;
+      margin-bottom: 12px;
+    }
+
+    .disagreement-position {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+
+    .pos-agent {
+      font-family: monospace;
+      font-weight: 600;
+      flex-shrink: 0;
+      min-width: 100px;
+    }
+
+    /* Debate: chat style */
+    .chat-thread {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .chat-topic {
+      text-align: center;
+      margin: 24px 0 16px;
+      position: relative;
+    }
+
+    .chat-topic:first-child {
+      margin-top: 0;
+    }
+
+    .chat-topic::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      border-top: 1px solid #222;
+    }
+
+    .chat-topic span {
+      position: relative;
+      background: #0a0a0a;
+      padding: 4px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #ef4444;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .chat-msg {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 4px 0;
+    }
+
+    .chat-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #000;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .chat-bubble {
+      background: #151515;
+      border: 1px solid #1e1e1e;
+      border-radius: 2px 12px 12px 12px;
+      padding: 10px 16px;
+      max-width: 75%;
+      font-size: 14px;
+      color: #ccc;
+      line-height: 1.55;
+    }
+
+    .chat-bubble .chat-sender {
+      font-size: 12px;
+      font-weight: 600;
+      font-family: monospace;
+      margin-bottom: 4px;
+    }
+
+    .chat-bubble p { margin-bottom: 6px; }
+    .chat-bubble p:last-child { margin-bottom: 0; }
+
+    .no-debate-msg {
+      text-align: center;
+      color: #666;
+      font-size: 15px;
+      padding: 40px 20px;
+    }
+
+    /* Synthesis */
+    .synthesis-box {
+      background: #111;
+      border: 1px solid #1e1e1e;
+      border-radius: 8px;
+      padding: 24px;
+      font-size: 14px;
+      color: #bbb;
+    }
+    .synthesis-box h1, .synthesis-box h2, .synthesis-box h3 {
+      color: #ddd;
+      font-size: 15px;
+      margin: 20px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .synthesis-box h1:first-child, .synthesis-box h2:first-child, .synthesis-box h3:first-child { margin-top: 0; }
+    .synthesis-box h4 { color: #ddd; font-size: 14px; margin: 16px 0 8px; }
+    .synthesis-box h4:first-child { margin-top: 0; }
+    .synthesis-box p { margin-bottom: 8px; }
+    .synthesis-box ul { margin: 4px 0 8px 20px; }
+    .synthesis-box li { margin-bottom: 4px; }
+    .synthesis-box table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 12px 0;
+    }
+    .synthesis-box th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #151515;
+      color: #888;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #222;
+    }
+    .synthesis-box td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #1a1a1a;
+      vertical-align: top;
+    }
+    .synthesis-box hr {
+      border: none;
+      border-top: 1px solid #1e1e1e;
+      margin: 16px 0;
+    }
+    .synthesis-box code {
+      background: #1a1a1a;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    .synthesis-box pre {
+      background: #1a1a1a;
+      padding: 12px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+    .synthesis-box blockquote {
+      border-left: 3px solid #333;
+      padding-left: 12px;
+      color: #999;
+      margin: 12px 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const AGENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4'];
+
+    function hexToRgba(hex, alpha) {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function formatTimestamp(isoString) {
+      // isoString may be like "2026-03-26T155249" (compact) or full ISO
+      let date;
+      // Try parsing compact format: "2026-03-26T155249" -> "2026-03-26T15:52:49"
+      const compact = isoString.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})$/);
+      if (compact) {
+        date = new Date(`${compact[1]}T${compact[2]}:${compact[3]}:${compact[4]}`);
+      } else {
+        date = new Date(isoString);
+      }
+      if (isNaN(date.getTime())) return isoString;
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+
+    function truncate(str, max) {
+      if (!str) return '';
+      return str.length > max ? str.slice(0, max).trimEnd() + '…' : str;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderProviderBadge(agentId, colorIndex) {
+      const color = AGENT_COLORS[colorIndex % AGENT_COLORS.length];
+      const bg = hexToRgba(color, 0.15);
+      const border = hexToRgba(color, 0.35);
+      return `<span class="provider-badge" style="background:${bg};border-color:${border};color:${color}">${escapeHtml(agentId)}</span>`;
+    }
+
+    function renderDebateCard(debate) {
+      const prompt = truncate(debate.prompt || '', 100);
+      const time = formatTimestamp(debate.timestamp || debate.started_at || '');
+      const providers = Array.isArray(debate.providers) ? debate.providers : [];
+
+      const badges = providers
+        .map((p, i) => renderProviderBadge(p.agent_id || p.provider, i))
+        .join('');
+
+      const count = debate.disagreements_count || 0;
+      const disagreeClass = count > 0 ? 'has-disagreements' : 'no-disagreements';
+      const disagreeText = count === 0
+        ? 'No disagreements'
+        : count === 1
+          ? '1 disagreement'
+          : `${count} disagreements`;
+
+      return `
+        <div class="debate-card" data-timestamp="${escapeHtml(debate.timestamp)}" role="button" tabindex="0">
+          <div class="debate-card-top">
+            <span class="debate-prompt">${escapeHtml(prompt)}</span>
+            <span class="debate-time">${escapeHtml(time)}</span>
+          </div>
+          <div class="debate-card-bottom">
+            ${badges}
+            <span class="disagreement-count ${disagreeClass}">${escapeHtml(disagreeText)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLanding(debates) {
+      const app = document.getElementById('app');
+      app.style.padding = '';
+      app.style.maxWidth = '';
+
+      let listHtml;
+      if (!debates || debates.length === 0) {
+        listHtml = `
+          <div class="state-message">
+            <p>No debates found</p>
+            <code>agent-debate run</code>
+          </div>
+        `;
+      } else {
+        listHtml = `<div class="debate-list">${debates.map(renderDebateCard).join('')}</div>`;
+      }
+
+      app.innerHTML = `
+        <div class="landing-header">
+          <h1>agent-debate</h1>
+          <p>Past debate runs</p>
+        </div>
+        ${listHtml}
+      `;
+
+      // Attach click handlers
+      app.querySelectorAll('.debate-card').forEach(card => {
+        const ts = card.dataset.timestamp;
+        const navigate = () => { location.hash = '#/debates/' + ts; };
+        card.addEventListener('click', navigate);
+        card.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(); }
+        });
+      });
+    }
+
+    function renderError() {
+      document.getElementById('app').innerHTML =
+        '<div class="error-message">Could not load debates.</div>';
+    }
+
+    function renderLoading() {
+      document.getElementById('app').innerHTML =
+        '<div class="loading-indicator">Loading…</div>';
+    }
+
+    async function loadLanding() {
+      renderLoading();
+      try {
+        const res = await fetch('/api/debates');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const debates = await res.json();
+        renderLanding(debates);
+      } catch (e) {
+        renderError();
+      }
+    }
+
+    function renderMarkdown(text) {
+      if (typeof marked !== 'undefined') {
+        return marked.parse(text);
+      }
+      const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      return '<pre>' + escaped + '</pre>';
+    }
+
+    const PERSONA_DESCRIPTIONS = {
+      security: 'Focus on security vulnerabilities, auth flaws, injection risks, and data exposure.',
+      performance: 'Focus on performance bottlenecks, memory usage, query efficiency, caching, and scalability.',
+      architecture: 'Focus on code organization, separation of concerns, extensibility, and design patterns.',
+      reliability: 'Focus on error handling, edge cases, failure modes, data integrity, and operational concerns.',
+      maintainability: 'Focus on code clarity, test coverage, documentation gaps, tech debt, and onboarding friction.',
+    };
+
+    function getAgentPersona(agentId, providers) {
+      const p = providers.find(p => p.agent_id === agentId);
+      return p ? p.persona : null;
+    }
+
+    function renderPersonaBadge(persona) {
+      if (!persona) return '';
+      const desc = PERSONA_DESCRIPTIONS[persona] || '';
+      const tooltip = desc ? ' title="' + escapeHtml(desc) + '"' : '';
+      return ' <span class="persona-badge">' + escapeHtml(persona) +
+        (desc ? ' <span class="persona-help"' + tooltip + '>?</span>' : '') +
+        '</span>';
+    }
+
+    function extractTldr(content) {
+      // Extract TL;DR section from markdown — everything between ### TL;DR and the next ### heading
+      const match = content.match(/###?\s*TL;?DR\s*\n([\s\S]*?)(?=\n###?\s|\n##\s|$)/i);
+      return match ? match[1].trim() : null;
+    }
+
+    function toggleOpening(cardId, btn) {
+      const tldr = document.getElementById(cardId + '-tldr');
+      const full = document.getElementById(cardId + '-full');
+      if (full.style.display === 'none') {
+        tldr.style.display = 'none';
+        full.style.display = 'block';
+        btn.textContent = 'Show TL;DR only';
+      } else {
+        tldr.style.display = 'block';
+        full.style.display = 'none';
+        btn.textContent = 'Show full response';
+      }
+    }
+
+    function toggleSynthesis(btn) {
+      const full = document.getElementById('synthesis-full');
+      if (full.style.display === 'none') {
+        full.style.display = 'block';
+        btn.textContent = 'Show summary only';
+      } else {
+        full.style.display = 'none';
+        btn.textContent = 'Show full synthesis';
+      }
+    }
+
+    function getAgentColor(agentId, providers) {
+      const idx = providers.findIndex(p => p.agent_id === agentId);
+      return AGENT_COLORS[idx >= 0 ? idx % AGENT_COLORS.length : 0];
+    }
+
+    function getInitials(agentId) {
+      const parts = agentId.replace(':', ' ').split(/[\s:]+/);
+      if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+      return agentId.substring(0, 2).toUpperCase();
+    }
+
+    function formatDuration(startedAt, completedAt) {
+      if (!startedAt || !completedAt) return null;
+      const ms = new Date(completedAt) - new Date(startedAt);
+      const seconds = Math.floor(ms / 1000);
+      if (seconds < 60) return seconds + 's';
+      const minutes = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return minutes + 'm ' + secs + 's';
+    }
+
+    function styleChatContent(html) {
+      const div = document.createElement('div');
+      div.innerHTML = html;
+      div.querySelectorAll('p').forEach(p => {
+        const text = p.textContent.toLowerCase();
+        if (/i('ll| will) concede|i agree with|i('ll| will) revise|concede partially/.test(text)) {
+          p.style.borderLeft = '2px solid #10b981';
+          p.style.background = 'rgba(16,185,129,0.08)';
+          p.style.padding = '4px 10px';
+          p.style.margin = '6px 0';
+        } else if (/i disagree|i maintain that/.test(text)) {
+          p.style.borderLeft = '2px solid #ef4444';
+          p.style.background = 'rgba(239,68,68,0.05)';
+          p.style.padding = '4px 10px';
+          p.style.margin = '6px 0';
+        }
+      });
+      return div.innerHTML;
+    }
+
+    function renderTranscriptContent(data) {
+      const providers = Array.isArray(data.meta.providers) ? data.meta.providers : [];
+      const duration = formatDuration(data.meta.started_at, data.meta.completed_at);
+      const timeStr = formatTimestamp(data.meta.timestamp || data.meta.started_at || '');
+      const metaText = duration ? timeStr + ' \u00b7 ' + duration : timeStr;
+
+      // Header badges
+      const badges = providers.map((p, i) => {
+        const color = AGENT_COLORS[i % AGENT_COLORS.length];
+        const bg = hexToRgba(color, 0.15);
+        const personaLabel = p.persona ? ' (' + escapeHtml(p.persona) + ')' : '';
+        return '<span class="badge" style="background:' + bg + ';color:' + color + '">' + escapeHtml(p.agent_id) + personaLabel + '</span>';
+      }).join('');
+
+      // Phase nav
+      const debateDisabled = !data.debate;
+      const debateNavClass = debateDisabled ? ' class="disabled"' : '';
+
+      // Opening statements
+      const openingCards = (data.opening.responses || []).map((r, idx) => {
+        const color = getAgentColor(r.agent_id, providers);
+        const tldr = extractTldr(r.content);
+        const cardId = 'opening-card-' + idx;
+        const tldrHtml = tldr
+          ? renderMarkdown(tldr)
+          : renderMarkdown(r.content.split('\n').slice(0, 5).join('\n'));
+        const fullHtml = renderMarkdown(r.content);
+        const persona = getAgentPersona(r.agent_id, providers);
+        return '<div class="agent-card">' +
+          '<div class="agent-card-header">' +
+            '<div class="agent-dot" style="background:' + color + '"></div>' +
+            '<span class="agent-name" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</span>' +
+            renderPersonaBadge(persona) +
+          '</div>' +
+          '<div class="agent-card-body">' +
+            '<div id="' + cardId + '-tldr">' + tldrHtml + '</div>' +
+            '<div id="' + cardId + '-full" style="display:none">' + fullHtml + '</div>' +
+            '<button class="expand-toggle" onclick="toggleOpening(\'' + cardId + '\', this)">Show full response</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      // Analysis: findings
+      const severityOrder = { critical: 0, important: 1, minor: 2 };
+      const findings = (data.dedup && data.dedup.findings ? data.dedup.findings : [])
+        .slice()
+        .sort((a, b) => (severityOrder[a.severity] || 9) - (severityOrder[b.severity] || 9));
+
+      let findingsHtml = '';
+      if (findings.length > 0) {
+        const rows = findings.map(f => {
+          const sevClass = 'severity-' + (f.severity || 'minor');
+          const agents = (f.agents || []).map(aid => {
+            const c = getAgentColor(aid, providers);
+            return '<span style="color:' + c + ';font-family:monospace;font-size:12px">' + escapeHtml(aid) + '</span>';
+          }).join(', ');
+          return '<tr><td>' + escapeHtml(f.topic || '') + '</td>' +
+            '<td><span class="' + sevClass + '">' + escapeHtml(f.severity || '') + '</span></td>' +
+            '<td>' + agents + '</td></tr>';
+        }).join('');
+        findingsHtml = '<h3 style="font-size:14px;color:#888;margin-bottom:12px">Deduplicated Findings</h3>' +
+          '<table class="findings-table"><thead><tr><th>Finding</th><th>Severity</th><th>Agents</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody></table>';
+      }
+
+      // Analysis: disagreements
+      const disagreements = data.dedup && data.dedup.disagreements ? data.dedup.disagreements : [];
+      let disagreementsHtml = '';
+      if (disagreements.length > 0) {
+        disagreementsHtml = '<h3 style="font-size:14px;color:#888;margin-bottom:12px">Disagreements</h3>' +
+          disagreements.map(d => {
+            const positions = Object.entries(d.positions || {}).map(([aid, pos]) => {
+              const c = getAgentColor(aid, providers);
+              return '<div class="disagreement-position">' +
+                '<span class="pos-agent" style="color:' + c + '">' + escapeHtml(aid) + '</span>' +
+                '<span>' + escapeHtml(pos) + '</span></div>';
+            }).join('');
+            return '<div class="disagreement">' +
+              '<div class="disagreement-title-heading">' + escapeHtml(d.topic || '') + '</div>' +
+              positions + '</div>';
+          }).join('');
+      }
+
+      // Debate section
+      let debateContent = '';
+      if (!data.debate) {
+        debateContent = '<div class="no-debate-msg">Agents agreed &mdash; no targeted debate was needed.</div>';
+      } else {
+        const responses = data.debate.responses || [];
+        let chatHtml = '';
+
+        // Show disagreement topics as dividers
+        const disagreements = (data.dedup && data.dedup.disagreements) || [];
+        if (disagreements.length > 0) {
+          chatHtml += '<div class="chat-topic"><span>' + escapeHtml(disagreements.map(d => d.topic).join(' & ')) + '</span></div>';
+        }
+
+        // Each agent's full debate response as a chat bubble
+        responses.forEach(r => {
+          const color = getAgentColor(r.agent_id, providers);
+          const initials = getInitials(r.agent_id);
+          const persona = getAgentPersona(r.agent_id, providers);
+          const content = styleChatContent(renderMarkdown(r.content));
+          chatHtml += '<div class="chat-msg">' +
+            '<div class="chat-avatar" style="background:' + color + '">' + initials + '</div>' +
+            '<div class="chat-bubble">' +
+              '<div class="chat-sender" style="color:' + color + '">' + escapeHtml(r.agent_id) + renderPersonaBadge(persona) + '</div>' +
+              content +
+            '</div></div>';
+        });
+        debateContent = '<div class="chat-thread">' + chatHtml + '</div>';
+      }
+
+      // Synthesis — extract first section as summary, rest is expandable
+      let synthesisHtml = '';
+      if (data.synthesis && data.synthesis.content) {
+        const raw = data.synthesis.content;
+        // Split on ## headings to find first meaningful section
+        const sections = raw.split(/(?=^##\s)/m).filter(s => s.trim());
+        if (sections.length > 1) {
+          // First section (or two short sections) as summary
+          const summaryMd = sections.slice(0, 2).join('\n');
+          const restMd = sections.slice(2).join('\n');
+          synthesisHtml =
+            '<div class="synthesis-box">' +
+              '<div id="synthesis-summary">' + renderMarkdown(summaryMd) + '</div>' +
+              (restMd.trim() ?
+                '<div id="synthesis-full" style="display:none">' + renderMarkdown(restMd) + '</div>' +
+                '<button class="expand-toggle" onclick="toggleSynthesis(this)">Show full synthesis</button>'
+              : '') +
+            '</div>';
+        } else {
+          synthesisHtml = '<div class="synthesis-box">' + renderMarkdown(raw) + '</div>';
+        }
+      } else {
+        synthesisHtml = '<div class="synthesis-box"><p style="color:#666">No synthesis available.</p></div>';
+      }
+
+      const app = document.getElementById('app');
+      app.style.padding = '0';
+      app.style.maxWidth = 'none';
+      app.innerHTML =
+        '<div class="header">' +
+          '<div class="header-top">' +
+            '<div>' +
+              '<a href="#/" class="back-link">&larr; All debates</a>' +
+              '<h1>' + escapeHtml(data.meta.prompt || '') + '</h1>' +
+            '</div>' +
+            '<span class="meta">' + escapeHtml(metaText) + '</span>' +
+          '</div>' +
+          '<div class="badges">' + badges + '</div>' +
+        '</div>' +
+        '<nav class="phase-nav">' +
+          '<a href="#opening" data-section="opening" class="active">Opening</a>' +
+          '<a href="#analysis" data-section="analysis">Analysis</a>' +
+          '<a href="#debate" data-section="debate"' + debateNavClass + '>Debate</a>' +
+          '<a href="#synthesis" data-section="synthesis">Synthesis</a>' +
+        '</nav>' +
+        '<div class="content">' +
+          '<section id="opening" class="phase">' +
+            '<div class="phase-title">Opening Statements</div>' +
+            openingCards +
+          '</section>' +
+          '<section id="analysis" class="phase">' +
+            '<div class="phase-title">Orchestrator Analysis</div>' +
+            findingsHtml +
+            disagreementsHtml +
+          '</section>' +
+          '<section id="debate" class="phase">' +
+            '<div class="phase-title">Targeted Debate</div>' +
+            debateContent +
+          '</section>' +
+          '<section id="synthesis" class="phase">' +
+            '<div class="phase-title">Synthesis</div>' +
+            synthesisHtml +
+          '</section>' +
+        '</div>';
+
+      // Dynamically position sticky phase-nav below the header
+      const header = app.querySelector('.header');
+      const nav = app.querySelector('.phase-nav');
+      if (header && nav) {
+        const headerHeight = header.offsetHeight;
+        nav.style.top = headerHeight + 'px';
+      }
+
+      // Phase nav click handlers
+      app.querySelectorAll('.phase-nav a:not(.disabled)').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          const sectionId = a.dataset.section;
+          const el = document.getElementById(sectionId);
+          if (el) el.scrollIntoView({ behavior: 'smooth' });
+        });
+      });
+
+      // Scroll tracking via IntersectionObserver
+      const navLinks = app.querySelectorAll('.phase-nav a');
+      const sections = app.querySelectorAll('.phase');
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            navLinks.forEach(link => link.classList.remove('active'));
+            const active = app.querySelector('.phase-nav a[data-section="' + entry.target.id + '"]');
+            if (active && !active.classList.contains('disabled')) active.classList.add('active');
+          }
+        });
+      }, { rootMargin: '-20% 0px -60% 0px' });
+      sections.forEach(s => observer.observe(s));
+    }
+
+    async function renderTranscript(timestamp) {
+      const app = document.getElementById('app');
+      app.innerHTML = '<div class="loading-indicator">Loading transcript...</div>';
+      try {
+        const res = await fetch('/api/debates/' + encodeURIComponent(timestamp));
+        if (res.status === 404) {
+          app.innerHTML = '<div class="error-message">Debate not found.</div>';
+          return;
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          app.innerHTML = '<div class="error-message">Could not parse debate.</div>';
+          return;
+        }
+        renderTranscriptContent(data);
+      } catch (e) {
+        app.innerHTML = '<div class="error-message">Could not load debate.</div>';
+      }
+    }
+
+    function route() {
+      const hash = location.hash;
+      const transcriptMatch = hash.match(/^#\/debates\/(.+)$/);
+      if (transcriptMatch) {
+        renderTranscript(transcriptMatch[1]);
+      } else {
+        // Empty, "#/", or "#" — show landing
+        loadLanding();
+      }
+    }
+
+    window.addEventListener('hashchange', route);
+    route();
+  </script>
+</body>
+</html>

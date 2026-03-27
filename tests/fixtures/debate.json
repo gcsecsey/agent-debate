@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "meta": {
+    "prompt": "Should we use REST or gRPC?",
+    "providers": [
+      { "provider": "claude", "model": "opus", "agent_id": "claude:opus" },
+      { "provider": "codex", "model": null, "agent_id": "codex" }
+    ],
+    "orchestrator_model": "sonnet",
+    "max_rounds": 1,
+    "cwd": "/tmp/test",
+    "started_at": "2026-03-26T15:52:49.767923",
+    "completed_at": "2026-03-26T15:55:12.123456"
+  },
+  "opening": {
+    "responses": [
+      {
+        "agent_id": "claude:opus",
+        "provider": "claude",
+        "model": "opus",
+        "content": "### TL;DR\nUse gRPC internally, REST externally.\n\n### Key Decisions\n1. Protocol Buffers for schema\n2. gRPC-Gateway for REST"
+      },
+      {
+        "agent_id": "codex",
+        "provider": "codex",
+        "model": null,
+        "content": "### TL;DR\nAll-in on gRPC including public APIs.\n\n### Key Decisions\n1. gRPC-Web via Envoy\n2. Unified proto definitions"
+      }
+    ]
+  },
+  "dedup": {
+    "findings": [
+      {
+        "topic": "Schema-first design essential",
+        "description": "Both agents recommend defining schemas before implementation.",
+        "agents": ["claude:opus", "codex"],
+        "severity": "important"
+      }
+    ],
+    "disagreements": [
+      {
+        "topic": "Public API format",
+        "positions": {
+          "claude:opus": "REST gateway for public APIs",
+          "codex": "gRPC-Web handles browsers fine"
+        }
+      }
+    ],
+    "raw_reasoning": "Agents agree on internal gRPC but diverge on public API approach."
+  },
+  "debate": {
+    "responses": [
+      {
+        "agent_id": "claude:opus",
+        "provider": "claude",
+        "model": "opus",
+        "content": "I maintain that a REST gateway is pragmatic. Third-party developers expect REST+OpenAPI docs."
+      },
+      {
+        "agent_id": "codex",
+        "provider": "codex",
+        "model": null,
+        "content": "I'll concede partially. If you have external API consumers, a gateway makes sense."
+      }
+    ]
+  },
+  "synthesis": {
+    "content": "### Recommendation\nAdopt gRPC-internal, REST-external architecture.\n\n### Next Steps\n1. Define proto schemas\n2. Set up gRPC for internal calls\n3. Add gRPC-Gateway for public REST"
+  }
+}

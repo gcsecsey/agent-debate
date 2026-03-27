@@ -297,6 +297,7 @@ class TestProviderTimeout:
         orch = Orchestrator.__new__(Orchestrator)
         orch.config = config
         orch._report = None
+        orch._semaphore = asyncio.Semaphore(5)
         orch._providers = {"claude": FakeProvider(["Fast response"])}
 
         # Inject slow provider for the second agent
@@ -430,6 +431,7 @@ def _make_orchestrator() -> Orchestrator:
     orch.config = config
     orch._providers = {}
     orch._report = None
+    orch._semaphore = asyncio.Semaphore(5)
     return orch
 
 
@@ -557,6 +559,7 @@ class TestRunOpening:
         orch.config = config
         orch._report = None
         orch._trace = None
+        orch._semaphore = asyncio.Semaphore(5)
         fake = FakeProvider(["Response from agent"])
         orch._providers = {"claude": fake}
 
@@ -593,6 +596,7 @@ class TestRunOpening:
         orch.config = config
         orch._report = None
         orch._trace = None
+        orch._semaphore = asyncio.Semaphore(5)
 
         fast_provider = FakeProvider(["Fast response"])
         slow_provider = SlowProvider()
@@ -753,6 +757,7 @@ class TestRunBackwardCompat:
         orch.config = config
         orch._report = None
         orch._trace = None
+        orch._semaphore = asyncio.Semaphore(5)
         fake = FakeProvider(["Agent response content"])
         orch._providers = {"claude": fake}
 
@@ -790,6 +795,7 @@ class TestJsonReport:
         orch.config = config
         orch._report = None
         orch._trace = None
+        orch._semaphore = asyncio.Semaphore(5)
         orch._providers = {"claude": FakeProvider(["Agent response content"])}
 
         async def fake_call_orchestrator(prompt, model=None):
@@ -832,6 +838,7 @@ class TestTwoPhaseIntegration:
             orch.config = config
             orch._report = None
             orch._trace = None
+            orch._semaphore = asyncio.Semaphore(5)
             fake = FakeProvider(["Agent response"])
             orch._providers = {"claude": fake}
 

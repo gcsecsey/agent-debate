@@ -474,5 +474,47 @@ def discover() -> None:
     )
 
 
+@main.command()
+@click.option(
+    "--cwd",
+    "-d",
+    default=".",
+    help="Working directory to scan for debates",
+)
+@click.option(
+    "--port",
+    "-p",
+    default=0,
+    type=int,
+    help="Port to serve on (default: random available port)",
+)
+def ui(cwd: str, port: int) -> None:
+    """Open the debate viewer in your browser.
+
+    Starts a local web server and opens the debate transcript viewer.
+    Shows all past debates from the working directory.
+
+    Examples:
+
+        agent-debate ui
+
+        agent-debate ui --cwd /path/to/project --port 8080
+    """
+    from .server import start_server
+
+    server = start_server(cwd, port=port, open_browser=True)
+    actual_port = server.server_address[1]
+    console.print(
+        f"[bold green]Debate viewer running at[/bold green] "
+        f"[link=http://localhost:{actual_port}]http://localhost:{actual_port}[/link]"
+    )
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Server stopped.[/dim]")
+        server.shutdown()
+
+
 if __name__ == "__main__":
     main()
