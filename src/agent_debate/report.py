@@ -73,6 +73,13 @@ class ReportWriter:
         )
         path.write_text(content)
 
+        self._json_data["opening"]["responses"].append({
+            "agent_id": response.agent_id,
+            "provider": response.provider,
+            "model": response.model,
+            "content": response.content,
+        })
+
     def save_dedup(
         self,
         raw_reasoning: str,
@@ -106,6 +113,26 @@ class ReportWriter:
             lines.append("None — agents substantially agreed.\n")
 
         (self.run_dir / "dedup.md").write_text("\n".join(lines))
+
+        self._json_data["dedup"] = {
+            "findings": [
+                {
+                    "topic": f.topic,
+                    "description": f.description,
+                    "agents": f.agents,
+                    "severity": f.severity,
+                }
+                for f in findings
+            ],
+            "disagreements": [
+                {
+                    "topic": d.topic,
+                    "positions": d.positions,
+                }
+                for d in disagreements
+            ],
+            "raw_reasoning": raw_reasoning,
+        }
 
     def save_debate_response(self, response: AgentResponse) -> None:
         """Save a targeted debate response to debate/<agent_id>.md."""
