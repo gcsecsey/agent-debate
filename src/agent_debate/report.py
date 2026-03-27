@@ -17,14 +17,43 @@ class ReportWriter:
         self.run_dir = Path(cwd) / base_dir / timestamp
         self._agents_dir = self.run_dir / "agents"
         self._debate_dir = self.run_dir / "debate"
+        self._json_data: dict = {}
 
-    def start_run(self, prompt: str, providers: list[ProviderConfig]) -> Path:
+    def start_run(
+        self,
+        prompt: str,
+        providers: list[ProviderConfig],
+        orchestrator_model: str = "sonnet",
+        max_rounds: int = 1,
+    ) -> Path:
         """Create the run directory and write the README header."""
         self._agents_dir.mkdir(parents=True, exist_ok=True)
 
-        agents_list = ", ".join(
-            pc.agent_id for pc in providers
-        )
+        self._json_data = {
+            "version": 1,
+            "meta": {
+                "prompt": prompt,
+                "providers": [
+                    {
+                        "provider": pc.provider,
+                        "model": pc.model,
+                        "agent_id": pc.agent_id,
+                    }
+                    for pc in providers
+                ],
+                "orchestrator_model": orchestrator_model,
+                "max_rounds": max_rounds,
+                "cwd": str(self.run_dir.parent.parent),
+                "started_at": datetime.now().isoformat(),
+                "completed_at": None,
+            },
+            "opening": {"responses": []},
+            "dedup": None,
+            "debate": None,
+            "synthesis": None,
+        }
+
+        agents_list = ", ".join(pc.agent_id for pc in providers)
         readme = (
             f"# Analysis Run\n\n"
             f"**Prompt:** {prompt}\n\n"
