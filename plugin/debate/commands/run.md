@@ -38,25 +38,42 @@ command -v agent-debate && agent-debate discover
 
 ### Step 2A: Package Mode
 
-Run the opening arguments phase first using `--opening-only`:
+Run the opening arguments phase first using `--opening-only` and `--format plain` (plain format avoids broken Rich terminal output):
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only --timeout 120
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only --format plain --timeout 120
 ```
 
 Note: Use a Bash timeout of at least 300000ms (5 minutes) since agents can take time to respond.
 
-Present the opening arguments output to the user and ask:
+After the command completes, **parse the report directory** from the output. Look for a line like:
+```
+REPORT_DIR: .context/debate/2026-03-27T143000
+```
+
+If a report directory was found, **read the individual agent responses** for richer presentation:
+
+1. Use Glob to find agent response files: `<report_dir>/agents/*.md`
+2. Read each agent's markdown file and present their full responses to the user
+3. Present a structured summary showing each agent's key points
+
+Ask the user:
 
 > "Here are the opening arguments from all agents. Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these responses sufficient?"
 
 If the user wants to proceed, run the full analysis:
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --timeout 120
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --format plain --timeout 120
 ```
 
-Read the output and present it to the user. Done.
+After completion, **read the report files** to present results:
+
+1. Parse the `REPORT_DIR:` line from the output
+2. Read `<report_dir>/synthesis.md` for the final synthesis
+3. Optionally read `<report_dir>/debate.json` for structured findings and disagreements
+4. Present the synthesis and key findings to the user
+5. Mention that full agent responses are available in the report directory
 
 ---
 

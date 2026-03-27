@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 
 import anyio
 import click
@@ -22,6 +24,25 @@ console = Console()
 AGENT_PREVIEW_LINES = 30
 
 
+def _plain(msg: str) -> None:
+    """Print a plain-text line to stdout (no Rich markup)."""
+    print(msg, flush=True)
+
+
+def _extract_tldr(content: str) -> str | None:
+    """Extract the TL;DR section body from an agent response."""
+    match = re.search(
+        r"#{1,4}\s*TL;?DR\s*\n(.*?)(?=\n#{1,4}\s|\Z)",
+        content,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        body = match.group(1).strip()
+        lines = [l for l in body.split("\n") if not re.match(r"^#{1,4}\s", l)]
+        return "\n".join(lines).strip() or None
+    return None
+
+
 class LiveDebateDisplay:
     """Manages a Rich Live display that stays compact and updates in-place.
 
@@ -39,6 +60,7 @@ class LiveDebateDisplay:
         self._phase_style: str = "blue"
         self._status_panels: list[Panel] = []
         self._live: Live | None = None
+        self._prev_sigwinch: signal.Handlers | None = None
 
     def start(self) -> Live:
         self._live = Live(
@@ -46,7 +68,42 @@ class LiveDebateDisplay:
             console=console,
             refresh_per_second=4,
         )
+        self._install_resize_handler()
         return self._live
+
+    def stop(self) -> None:
+        """Restore the previous SIGWINCH handler."""
+        self._uninstall_resize_handler()
+
+    def _install_resize_handler(self) -> None:
+        """Register a SIGWINCH handler to clear and redraw on terminal resize."""
+        if not hasattr(signal, "SIGWINCH"):
+            return
+        try:
+            self._prev_sigwinch = signal.getsignal(signal.SIGWINCH)
+            signal.signal(signal.SIGWINCH, self._on_resize)
+        except (OSError, ValueError):
+            # Not on main thread or signal not available
+            pass
+
+    def _uninstall_resize_handler(self) -> None:
+        """Restore the previous SIGWINCH handler."""
+        if not hasattr(signal, "SIGWINCH") or self._prev_sigwinch is None:
+            return
+        try:
+            signal.signal(signal.SIGWINCH, self._prev_sigwinch)
+        except (OSError, ValueError):
+            pass
+        self._prev_sigwinch = None
+
+    def _on_resize(self, signum: int, frame: object) -> None:
+        """Handle terminal resize: clear stale output and force a clean redraw."""
+        if self._live is not None:
+            console.clear()
+            self._live.refresh()
+        # Chain to previous handler
+        if callable(self._prev_sigwinch):
+            self._prev_sigwinch(signum, frame)
 
     def set_phase(self, text: str, style: str = "blue") -> None:
         self._phase = text
@@ -77,28 +134,13 @@ class LiveDebateDisplay:
         self._status_panels.append(panel)
         self._update()
 
-    @staticmethod
-    def _extract_tldr(content: str) -> str | None:
-        """Extract the TL;DR section body from an agent response."""
-        match = re.search(
-            r"#{1,4}\s*TL;?DR\s*\n(.*?)(?=\n#{1,4}\s|\Z)",
-            content,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if match:
-            # Strip any remaining markdown heading lines from the body
-            body = match.group(1).strip()
-            lines = [l for l in body.split("\n") if not re.match(r"^#{1,4}\s", l)]
-            return "\n".join(lines).strip() or None
-        return None
-
     def print_agent_summaries(self) -> None:
         """Print the TL;DR from each agent, falling back to first few lines."""
         for agent_id, buffer in self._agent_buffers.items():
             if not buffer.strip():
                 continue
 
-            tldr = self._extract_tldr(buffer)
+            tldr = _extract_tldr(buffer)
             if tldr:
                 display_text = tldr
             else:
@@ -172,11 +214,16 @@ class LiveDebateDisplay:
             self._live.update(self._render())
 
 
-def _print_report_path(report_dir: str | None, orchestrator: Orchestrator) -> None:
+def _print_report_path(
+    report_dir: str | None, orchestrator: Orchestrator, *, plain: bool = False
+) -> None:
     if report_dir and orchestrator._report:
-        console.print(
-            f"\n[dim]Full report saved to: {orchestrator._report.run_dir}[/dim]"
-        )
+        if plain:
+            _plain(f"\nREPORT_DIR: {orchestrator._report.run_dir}")
+        else:
+            console.print(
+                f"\n[dim]Full report saved to: {orchestrator._report.run_dir}[/dim]"
+            )
 
 
 async def _run(
@@ -189,6 +236,7 @@ async def _run(
     agent_timeout: int = 300,
     max_parallel: int = 5,
     opening_only: bool = False,
+    output_format: str = "rich",
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -205,26 +253,156 @@ async def _run(
     orchestrator = Orchestrator(config)
     active_agents = {c.agent_id for c in config.providers}
 
+    plain = output_format == "plain"
+
     skipped = requested_agents - active_agents
     if skipped:
+        if plain:
+            _plain(f"Skipped unavailable: {', '.join(sorted(skipped))}")
+            _plain(f"Continuing with: {', '.join(sorted(active_agents))}")
+        else:
+            console.print(
+                Panel(
+                    f"[bold yellow]Skipped unavailable providers:[/bold yellow] {', '.join(sorted(skipped))}\n"
+                    f"[dim]Continuing with: {', '.join(sorted(active_agents))}[/dim]",
+                    border_style="yellow",
+                )
+            )
+
+    if plain:
+        agents_str = ", ".join(c.agent_id for c in config.providers)
+        _plain(f"Prompt: {prompt}")
+        _plain(f"Agents: {agents_str}")
+        _plain(f"Max debate rounds: {max_rounds}")
+    else:
         console.print(
             Panel(
-                f"[bold yellow]Skipped unavailable providers:[/bold yellow] {', '.join(sorted(skipped))}\n"
-                f"[dim]Continuing with: {', '.join(sorted(active_agents))}[/dim]",
-                border_style="yellow",
+                f"[bold]Prompt:[/bold] {prompt}\n"
+                f"[bold]Agents:[/bold] {', '.join(c.agent_id for c in config.providers)}\n"
+                f"[bold]Max debate rounds:[/bold] {max_rounds}",
+                title="[bold]Multi-Perspective Analysis[/bold]",
+                border_style="bright_blue",
             )
         )
 
-    console.print(
-        Panel(
-            f"[bold]Prompt:[/bold] {prompt}\n"
-            f"[bold]Agents:[/bold] {', '.join(c.agent_id for c in config.providers)}\n"
-            f"[bold]Max debate rounds:[/bold] {max_rounds}",
-            title="[bold]Multi-Perspective Analysis[/bold]",
-            border_style="bright_blue",
-        )
-    )
+    if plain:
+        await _run_plain(prompt, orchestrator, opening_only, report_dir)
+    else:
+        await _run_rich(prompt, orchestrator, opening_only, report_dir)
 
+
+async def _run_plain(
+    prompt: str,
+    orchestrator: Orchestrator,
+    opening_only: bool,
+    report_dir: str | None,
+) -> None:
+    """Plain-text output path — no Rich Live, no interactive menus."""
+    agent_buffers: dict[str, str] = {}
+
+    # Phase 1: Opening arguments
+    _plain("\n=== Phase 1: Independent Analysis ===")
+    opening_responses: list[AgentResponse] = []
+
+    async for event in orchestrator.run_opening(prompt):
+        if isinstance(event, AgentResponse):
+            continue
+        match event.type:
+            case EventType.AGENT_STARTED:
+                aid = event.agent_id or "unknown"
+                agent_buffers[aid] = ""
+                _plain(f"  [STARTED] {aid}")
+            case EventType.AGENT_CHUNK:
+                aid = event.agent_id or "unknown"
+                if aid in agent_buffers:
+                    agent_buffers[aid] += event.content
+            case EventType.AGENT_COMPLETED:
+                aid = event.agent_id or "unknown"
+                buf = agent_buffers.get(aid, "")
+                line_count = len(buf.strip().split("\n")) if buf.strip() else 0
+                _plain(f"  [COMPLETED] {aid} ({line_count} lines)")
+            case EventType.OPENING_COMPLETE:
+                opening_responses = event.metadata["responses"]
+            case EventType.ERROR:
+                _plain(f"  [ERROR] {event.agent_id or 'unknown'}: {event.content}")
+
+    # Print agent summaries
+    for agent_id, buffer in agent_buffers.items():
+        if not buffer.strip():
+            continue
+        tldr = _extract_tldr(buffer)
+        if tldr:
+            _plain(f"\n--- {agent_id} (TL;DR) ---")
+            _plain(tldr)
+        else:
+            lines = buffer.strip().split("\n")
+            _plain(f"\n--- {agent_id} (preview) ---")
+            _plain("\n".join(lines[:5]))
+            if len(lines) > 5:
+                _plain("  ...")
+
+    if opening_only:
+        _plain("\nOpening-only mode — debate skipped.")
+        _print_report_path(report_dir, orchestrator, plain=True)
+        return
+
+    if not opening_responses:
+        _plain("\nNo agents responded — nothing to debate.")
+        _print_report_path(report_dir, orchestrator, plain=True)
+        return
+
+    # Auto-proceed to debate (no interactive menu in plain mode)
+    _plain("\n=== Phase 2: Deduplication & Debate ===")
+    synthesis_content = ""
+    agent_buffers.clear()
+
+    async for event in orchestrator.run_debate(prompt, opening_responses):
+        if isinstance(event, AgentResponse):
+            continue
+        match event.type:
+            case EventType.DEDUP_START:
+                _plain("  Deduplicating findings...")
+            case EventType.DEDUP_COMPLETE:
+                fc = event.metadata.get("findings_count", 0)
+                dc = event.metadata.get("disagreements_count", 0)
+                _plain(f"  Deduplication complete: {fc} findings, {dc} stark disagreement(s)")
+            case EventType.TARGETED_DEBATE_START:
+                _plain("\n=== Phase 3: Targeted Debate ===")
+                agent_buffers.clear()
+            case EventType.AGENT_STARTED:
+                aid = event.agent_id or "unknown"
+                agent_buffers[aid] = ""
+                _plain(f"  [STARTED] {aid}")
+            case EventType.AGENT_CHUNK:
+                aid = event.agent_id or "unknown"
+                if aid in agent_buffers:
+                    agent_buffers[aid] += event.content
+            case EventType.AGENT_COMPLETED:
+                aid = event.agent_id or "unknown"
+                buf = agent_buffers.get(aid, "")
+                line_count = len(buf.strip().split("\n")) if buf.strip() else 0
+                _plain(f"  [COMPLETED] {aid} ({line_count} lines)")
+            case EventType.SYNTHESIS_START:
+                _plain("\n=== Synthesis ===")
+            case EventType.SYNTHESIS_COMPLETE:
+                synthesis_content = event.content
+            case EventType.ERROR:
+                _plain(f"  [ERROR] {event.agent_id or 'unknown'}: {event.content}")
+
+    if synthesis_content:
+        _plain("\n--- Final Synthesis ---")
+        _plain(synthesis_content)
+
+    _print_report_path(report_dir, orchestrator, plain=True)
+
+
+async def _run_rich(
+    prompt: str,
+    orchestrator: Orchestrator,
+    opening_only: bool,
+    report_dir: str | None,
+) -> None:
+    """Rich interactive output path — Live display with interactive menus."""
     display = LiveDebateDisplay()
 
     # Phase 1: Opening arguments
@@ -256,6 +434,7 @@ async def _run(
                             border_style="red",
                         )
                     )
+    display.stop()
 
     # Show short summaries
     display.print_agent_summaries()
@@ -350,6 +529,7 @@ async def _run(
                             border_style="red",
                         )
                     )
+    display2.stop()
 
     # Print synthesis after Live context exits so it stays on screen
     if synthesis_content:
@@ -427,6 +607,14 @@ def main() -> None:
     default=False,
     help="Run only the opening arguments phase (skip debate)",
 )
+@click.option(
+    "--format",
+    "-f",
+    "output_format",
+    type=click.Choice(["rich", "plain"]),
+    default="rich",
+    help="Output format: rich (interactive terminal) or plain (CI/scripting/non-interactive)",
+)
 def run(
     prompt: str,
     providers: str,
@@ -437,6 +625,7 @@ def run(
     max_parallel: int,
     no_report: bool,
     opening_only: bool,
+    output_format: str,
 ) -> None:
     """Run a multi-perspective analysis.
 
@@ -454,7 +643,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only, output_format
     )
 
 
