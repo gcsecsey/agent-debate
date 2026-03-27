@@ -1,0 +1,6 @@
+{
+  "name": "security",
+  "label": "Security Analyst",
+  "description": "Focus on security vulnerabilities, auth flaws, injection risks, and data exposure. Flag anything that could be exploited.",
+  "instruction": "You are analyzing this from a **security** perspective. Focus on security vulnerabilities, auth flaws, injection risks, and data exposure. Flag anything that could be exploited.\n\nStill provide a complete analysis, but weight your attention toward your area of expertise."
+}

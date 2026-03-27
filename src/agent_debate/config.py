@@ -65,6 +65,7 @@ def build_config(
     report_dir: str | None = ".context/debate",
     agent_timeout: int = 300,
     max_parallel: int = 5,
+    auto_persona: bool = False,
 ) -> DebateConfig:
     """Build a DebateConfig from CLI-style arguments."""
     return DebateConfig(
@@ -75,4 +76,5 @@ def build_config(
         report_dir=report_dir,
         agent_timeout=agent_timeout,
         max_parallel=max_parallel,
+        auto_persona=auto_persona,
     )
