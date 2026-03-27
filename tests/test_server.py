@@ -124,3 +124,17 @@ def test_api_debate_detail_404_for_missing(tmp_path: Path) -> None:
         assert exc_info.value.code == 404
     finally:
         server.shutdown()
+
+
+def test_root_serves_html(tmp_path: Path) -> None:
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            content_type = resp.headers.get("Content-Type", "")
+            assert "text/html" in content_type
+            body = resp.read().decode()
+            assert "agent-debate" in body.lower() or "debate" in body.lower()
+    finally:
+        server.shutdown()
