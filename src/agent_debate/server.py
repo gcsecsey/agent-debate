@@ -63,7 +63,10 @@ class DebateViewerHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
-        if self.path == "/api/debates":
+        if self.path == "/api/personas":
+            from .personas import load_all_personas
+            self._json_response(load_all_personas())
+        elif self.path == "/api/debates":
             self._json_response(scan_debates(self.cwd))
         elif self.path.startswith("/api/debates/"):
             timestamp = self.path.split("/api/debates/", 1)[1]

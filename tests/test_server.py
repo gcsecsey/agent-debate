@@ -138,3 +138,18 @@ def test_root_serves_html(tmp_path: Path) -> None:
             assert "agent-debate" in body.lower() or "debate" in body.lower()
     finally:
         server.shutdown()
+
+
+def test_api_personas_returns_all(tmp_path: Path) -> None:
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/api/personas"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read())
+            assert "security" in data
+            assert "label" in data["security"]
+            assert "description" in data["security"]
+            assert "instruction" in data["security"]
+    finally:
+        server.shutdown()

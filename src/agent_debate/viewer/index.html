@@ -778,13 +778,17 @@
       return '<pre>' + escaped + '</pre>';
     }
 
-    const PERSONA_DESCRIPTIONS = {
-      security: 'Focus on security vulnerabilities, auth flaws, injection risks, and data exposure.',
-      performance: 'Focus on performance bottlenecks, memory usage, query efficiency, caching, and scalability.',
-      architecture: 'Focus on code organization, separation of concerns, extensibility, and design patterns.',
-      reliability: 'Focus on error handling, edge cases, failure modes, data integrity, and operational concerns.',
-      maintainability: 'Focus on code clarity, test coverage, documentation gaps, tech debt, and onboarding friction.',
-    };
+    // Loaded from /api/personas on init
+    let PERSONA_DATA = {};
+
+    async function loadPersonas() {
+      try {
+        const res = await fetch('/api/personas');
+        if (res.ok) PERSONA_DATA = await res.json();
+      } catch (e) {
+        // Silently fall back to empty — tooltips just won't show descriptions
+      }
+    }
 
     function getAgentPersona(agentId, providers) {
       const p = providers.find(p => p.agent_id === agentId);
@@ -793,9 +797,11 @@
 
     function renderPersonaBadge(persona) {
       if (!persona) return '';
-      const desc = PERSONA_DESCRIPTIONS[persona] || '';
+      const data = PERSONA_DATA[persona];
+      const label = data ? data.label : persona;
+      const desc = data ? data.description : '';
       const tooltip = desc ? ' title="' + escapeHtml(desc) + '"' : '';
-      return ' <span class="persona-badge">' + escapeHtml(persona) +
+      return ' <span class="persona-badge">' + escapeHtml(label) +
         (desc ? ' <span class="persona-help"' + tooltip + '>?</span>' : '') +
         '</span>';
     }
@@ -1149,7 +1155,7 @@
     }
 
     window.addEventListener('hashchange', route);
-    route();
+    loadPersonas().then(() => route());
   </script>
 </body>
 </html>
