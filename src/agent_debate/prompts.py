@@ -10,7 +10,7 @@ from .types import AgentResponse, Disagreement
 # --- Round 1: Independent analysis ---
 
 ROUND_1_TEMPLATE = """\
-Analyze the following request and provide your recommendation.
+Analyze the following request and provide your perspective.
 
 ## Request
 
@@ -18,30 +18,32 @@ Analyze the following request and provide your recommendation.
 
 ## Instructions
 
-Provide a thorough, structured analysis. Be specific — reference file paths, \
-function names, and concrete implementation details where relevant.
+Provide a thorough, structured analysis. Adapt your depth and specificity \
+to the topic — for technical questions, reference file paths, code, and \
+implementation details; for general or philosophical questions, reference \
+evidence, reasoning, and real-world examples.
 
 Structure your response with these sections:
 
 ### TL;DR
-Your position in 2-3 sentences. What do you recommend and why? No hedging.
+Your position in 2-3 sentences. What do you recommend or conclude? No hedging.
 
 ### Approach
-Your recommended approach in 2-3 paragraphs.
+Your recommended approach or reasoning in 2-3 paragraphs.
 
-### Key Decisions
-Numbered list of the most important design/implementation decisions, \
+### Key Points
+Numbered list of the most important considerations, \
 each with a brief rationale.
 
 ### Trade-offs
-What are you gaining and giving up with this approach?
+What are the tensions or trade-offs in this space?
 
 ### Concerns
-What could go wrong? What are the risks or unknowns?
+What could go wrong? What are the risks, unknowns, or counterarguments?
 
-### Proposed Changes
-If applicable, describe specific file changes, code patterns, or \
-implementation steps. Include code snippets where helpful.
+### Proposed Actions
+If applicable, describe concrete next steps — whether that's code changes, \
+further research, or a course of action. Include specifics where helpful.
 """
 
 
@@ -83,7 +85,7 @@ def _summarize_prompt(prompt: str, max_chars: int = 200) -> str:
 
 
 _STRUCTURED_HEADERS = re.compile(
-    r"^###\s+(Key Decisions|Trade-offs|Concerns)\s*$",
+    r"^###\s+(Key Decisions|Key Points|Trade-offs|Concerns)\s*$",
     re.MULTILINE,
 )
 _ANY_H3 = re.compile(r"^###\s+", re.MULTILINE)
@@ -160,10 +162,10 @@ Return your analysis as a JSON object with this structure:
 ```
 
 Guidelines:
-- A finding is "critical" if ignoring it would likely cause a bug, security issue, \
-or significant architectural problem
-- A finding is "important" if it meaningfully affects quality, performance, or maintainability
-- A finding is "minor" if it's a nice-to-have or stylistic preference
+- A finding is "critical" if ignoring it would lead to serious consequences \
+(e.g. bugs, security issues, fundamental errors in reasoning)
+- A finding is "important" if it meaningfully affects the outcome, quality, or approach
+- A finding is "minor" if it's a nice-to-have, stylistic preference, or secondary consideration
 - Only flag stark_disagreements for genuine contradictions (agent A says do X, \
 agent B says do the opposite), NOT for different emphasis on the same point
 - If agents substantially agree, return an empty stark_disagreements array
@@ -215,11 +217,11 @@ and other agents' analyses.
 ## Instructions
 
 Address each contradiction in turn. For each, make your strongest case in 1-2 \
-paragraphs. Be specific and reference concrete implementation details. If, after \
+paragraphs. Be specific and reference concrete evidence or reasoning. If, after \
 seeing the other positions, you believe your original position was wrong, say so \
 directly and explain why.
 
-Do NOT hedge or seek artificial compromise — give your honest technical judgment.
+Do NOT hedge or seek artificial compromise — give your honest judgment.
 """
 
 
@@ -298,8 +300,8 @@ Your judgment call — the recommended approach, drawing on the strongest \
 arguments. Explain your reasoning.
 
 ### Next Steps
-Concrete, actionable steps the user can take. If agents proposed code \
-changes, include the most well-reasoned version.
+Concrete, actionable steps the user can take. Include the most \
+well-reasoned recommendations from the agents.
 """
 
 
