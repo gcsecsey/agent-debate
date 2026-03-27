@@ -46,17 +46,36 @@ class Orchestrator:
         self._init_providers()
 
     def _init_providers(self) -> None:
-        """Instantiate provider adapters, checking availability."""
+        """Instantiate provider adapters, skipping unavailable ones."""
+        unavailable: list[str] = []
         for pc in self.config.providers:
             if pc.provider not in self._providers:
-                provider_cls = get_provider(pc.provider)
+                try:
+                    provider_cls = get_provider(pc.provider)
+                except ValueError:
+                    unavailable.append(pc.agent_id)
+                    continue
                 provider = provider_cls()
                 if not provider.available():
-                    raise RuntimeError(
-                        f"Provider '{pc.provider}' is not available. "
-                        f"Is the CLI installed?"
-                    )
+                    unavailable.append(pc.agent_id)
+                    continue
                 self._providers[pc.provider] = provider
+
+        if unavailable:
+            # Remove unavailable providers from config
+            self.config.providers = [
+                pc for pc in self.config.providers
+                if pc.provider in self._providers
+            ]
+            logger.warning(
+                "Skipping unavailable providers: %s", ", ".join(unavailable)
+            )
+
+        if not self._providers:
+            raise RuntimeError(
+                f"No providers available. Tried: {', '.join(unavailable)}. "
+                "Install at least one provider CLI."
+            )
 
     def _agent_id(self, index: int, pc: ProviderConfig) -> str:
         """Generate a unique agent ID, handling duplicates."""

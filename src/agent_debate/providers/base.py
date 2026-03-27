@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
@@ -43,5 +44,15 @@ class BaseProvider(ABC):
         return True
 
     def _cli_available(self, command: str) -> bool:
-        """Check if a CLI command is on PATH."""
-        return shutil.which(command) is not None
+        """Check if a CLI command is on PATH and actually runs."""
+        if shutil.which(command) is None:
+            return False
+        try:
+            subprocess.run(
+                [command, "--version"],
+                capture_output=True,
+                timeout=5,
+            )
+            return True
+        except (subprocess.SubprocessError, OSError):
+            return False

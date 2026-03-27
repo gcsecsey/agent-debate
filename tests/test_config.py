@@ -22,9 +22,11 @@ class TestParseProviderString:
         assert result.provider == "claude"
         assert result.model == "opus"
 
-    def test_unknown_provider(self):
-        with pytest.raises(ValueError, match="Unknown provider 'unknown'"):
-            parse_provider_string("unknown")
+    def test_unknown_provider_accepted(self):
+        """Config parser accepts unknown providers — orchestrator handles validation."""
+        result = parse_provider_string("unknown")
+        assert result.provider == "unknown"
+        assert result.model is None
 
     def test_whitespace_stripped(self):
         result = parse_provider_string("  claude:sonnet  ")
@@ -69,8 +71,10 @@ class TestParseProvidersString:
         assert result[0].model == "sonnet"
 
     def test_unknown_group_treated_as_provider(self):
-        with pytest.raises(ValueError, match="Unknown provider"):
-            parse_providers_string("nonexistent_group")
+        """Unknown group names are treated as provider specs — orchestrator validates."""
+        result = parse_providers_string("nonexistent_group")
+        assert len(result) == 1
+        assert result[0].provider == "nonexistent_group"
 
 
 class TestBuildConfig:

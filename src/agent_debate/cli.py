@@ -79,14 +79,17 @@ class LiveDebateDisplay:
 
     @staticmethod
     def _extract_tldr(content: str) -> str | None:
-        """Extract the TL;DR section from an agent response."""
+        """Extract the TL;DR section body from an agent response."""
         match = re.search(
-            r"###\s*TL;?DR\s*\n(.*?)(?=\n###|\Z)",
+            r"#{1,4}\s*TL;?DR\s*\n(.*?)(?=\n#{1,4}\s|\Z)",
             content,
             re.DOTALL | re.IGNORECASE,
         )
         if match:
-            return match.group(1).strip()
+            # Strip any remaining markdown heading lines from the body
+            body = match.group(1).strip()
+            lines = [l for l in body.split("\n") if not re.match(r"^#{1,4}\s", l)]
+            return "\n".join(lines).strip() or None
         return None
 
     def print_agent_summaries(self) -> None:
@@ -196,6 +199,20 @@ async def _run(
         agent_timeout=agent_timeout,
     )
 
+    requested_agents = {c.agent_id for c in config.providers}
+    orchestrator = Orchestrator(config)
+    active_agents = {c.agent_id for c in config.providers}
+
+    skipped = requested_agents - active_agents
+    if skipped:
+        console.print(
+            Panel(
+                f"[bold yellow]Skipped unavailable providers:[/bold yellow] {', '.join(sorted(skipped))}\n"
+                f"[dim]Continuing with: {', '.join(sorted(active_agents))}[/dim]",
+                border_style="yellow",
+            )
+        )
+
     console.print(
         Panel(
             f"[bold]Prompt:[/bold] {prompt}\n"
@@ -206,7 +223,6 @@ async def _run(
         )
     )
 
-    orchestrator = Orchestrator(config)
     display = LiveDebateDisplay()
 
     # Phase 1: Opening arguments

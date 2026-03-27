@@ -12,15 +12,14 @@ MODEL_GROUPS: dict[str, str] = {
 
 
 def parse_provider_string(spec: str) -> ProviderConfig:
-    """Parse a provider spec like 'claude:opus' or 'codex' into a ProviderConfig."""
+    """Parse a provider spec like 'claude:opus' or 'codex' into a ProviderConfig.
+
+    Does not validate whether the provider exists — that's handled
+    by the orchestrator at init time, which skips unknown/unavailable providers.
+    """
     parts = spec.strip().split(":", 1)
     provider = parts[0]
     model = parts[1] if len(parts) > 1 else None
-
-    if provider not in PROVIDERS:
-        available = ", ".join(PROVIDERS.keys())
-        raise ValueError(f"Unknown provider '{provider}'. Available: {available}")
-
     return ProviderConfig(provider=provider, model=model)
 
 

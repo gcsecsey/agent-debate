@@ -20,6 +20,7 @@ class SubprocessProvider(BaseProvider):
 
     command: str  # CLI binary name, e.g. "codex", "gemini", "amp"
     uses_stdin: bool = False  # Whether prompt is delivered via stdin vs file ref
+    idle_timeout: int = 30  # Kill agent if no output for this many seconds
 
     def build_args(
         self,
@@ -102,7 +103,15 @@ class SubprocessProvider(BaseProvider):
 
             try:
                 while True:
-                    chunk = await reader.read(4096)
+                    try:
+                        chunk = await asyncio.wait_for(
+                            reader.read(4096), timeout=self.idle_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(
+                            f"Provider '{self.command}' produced no output for "
+                            f"{self.idle_timeout}s — likely stalled or rate-limited"
+                        )
                     if not chunk:
                         break
                     decoded = chunk.decode("utf-8", errors="replace")

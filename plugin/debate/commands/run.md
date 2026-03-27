@@ -41,8 +41,10 @@ command -v agent-debate && agent-debate discover
 Run the opening arguments phase first using `--opening-only`:
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only --timeout 120
 ```
+
+Note: Use a Bash timeout of at least 300000ms (5 minutes) since agents can take time to respond.
 
 Present the opening arguments output to the user and ask:
 
@@ -51,7 +53,7 @@ Present the opening arguments output to the user and ask:
 If the user wants to proceed, run the full analysis:
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --timeout 120
 ```
 
 Read the output and present it to the user. Done.
