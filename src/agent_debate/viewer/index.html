@@ -883,7 +883,7 @@
         '</div>' +
         '<div id="add-persona-form" class="add-persona-form" style="display:none">' +
           '<div class="form-row">' +
-            '<label>Name <span class="form-hint">lowercase, used in CLI (e.g. devils_advocate)</span></label>' +
+            '<label>Name <span class="form-hint">optional — derived from label if blank (e.g. devils_advocate)</span></label>' +
             '<input type="text" id="persona-name" placeholder="e.g. conspiracy_theorist" />' +
           '</div>' +
           '<div class="form-row">' +
@@ -958,12 +958,16 @@
       });
       if (submitBtn) submitBtn.addEventListener('click', async () => {
         errorEl.style.display = 'none';
-        const name = document.getElementById('persona-name').value.trim();
+        let name = document.getElementById('persona-name').value.trim();
         const label = document.getElementById('persona-label').value.trim();
         const desc = document.getElementById('persona-desc').value.trim();
         const instruction = document.getElementById('persona-instruction').value.trim();
 
-        if (!name) { errorEl.textContent = 'Name is required'; errorEl.style.display = 'block'; return; }
+        // Derive name from label if not provided
+        if (!name && label) {
+          name = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        }
+        if (!name) { errorEl.textContent = 'Name or label is required'; errorEl.style.display = 'block'; return; }
         if (!desc) { errorEl.textContent = 'Description is required'; errorEl.style.display = 'block'; return; }
 
         try {

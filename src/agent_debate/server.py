@@ -93,10 +93,16 @@ class DebateViewerHandler(BaseHTTPRequestHandler):
                 self._error(HTTPStatus.BAD_REQUEST, "Invalid JSON")
                 return
 
-            # Validate required fields
+            # Validate and derive fields
+            import re
             name = data.get("name", "").strip()
+            label = data.get("label", "").strip()
+
+            # Derive name from label if not provided
+            if not name and label:
+                name = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
             if not name:
-                self._error(HTTPStatus.BAD_REQUEST, "Missing 'name' field")
+                self._error(HTTPStatus.BAD_REQUEST, "Name or label is required")
                 return
             if not name.replace("_", "").replace("-", "").isalnum():
                 self._error(HTTPStatus.BAD_REQUEST, "Name must be alphanumeric (with _ or -)")
@@ -105,7 +111,7 @@ class DebateViewerHandler(BaseHTTPRequestHandler):
             from .personas import PERSONAS_DIR
             persona = {
                 "name": name,
-                "label": data.get("label", name.replace("_", " ").title()),
+                "label": label or name.replace("_", " ").title(),
                 "description": data.get("description", ""),
                 "instruction": data.get("instruction", ""),
             }
