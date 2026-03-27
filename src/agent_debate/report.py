@@ -26,9 +26,12 @@ class ReportWriter:
         providers: list[ProviderConfig],
         orchestrator_model: str = "sonnet",
         max_rounds: int = 1,
+        personas: list[str | None] | None = None,
     ) -> Path:
         """Create the run directory and write the README header."""
         self._agents_dir.mkdir(parents=True, exist_ok=True)
+
+        resolved_personas = personas or [None] * len(providers)
 
         self._json_data = {
             "version": 1,
@@ -39,8 +42,9 @@ class ReportWriter:
                         "provider": pc.provider,
                         "model": pc.model,
                         "agent_id": pc.agent_id,
+                        "persona": resolved_personas[i] if i < len(resolved_personas) else pc.persona,
                     }
-                    for pc in providers
+                    for i, pc in enumerate(providers)
                 ],
                 "orchestrator_model": orchestrator_model,
                 "max_rounds": max_rounds,

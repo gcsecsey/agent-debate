@@ -106,6 +106,7 @@ class Orchestrator:
                 self.config.providers,
                 orchestrator_model=self.config.orchestrator_model,
                 max_rounds=self.config.max_rounds,
+                personas=self._resolve_personas(),
             )
 
         self._trace = tracing.start_trace(

@@ -311,6 +311,38 @@
     .agent-card-body p { margin-bottom: 8px; }
     .agent-card-body ul { margin: 4px 0 8px 20px; }
     .agent-card-body li { margin-bottom: 4px; }
+    .persona-badge {
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: capitalize;
+      color: #888;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid #333;
+      padding: 1px 8px;
+      border-radius: 3px;
+      margin-left: 8px;
+    }
+    .persona-help {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      color: #666;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: help;
+      margin-left: 2px;
+      vertical-align: middle;
+      position: relative;
+    }
+    .persona-help:hover {
+      background: rgba(255,255,255,0.2);
+      color: #ccc;
+    }
+
     .expand-toggle {
       background: none;
       border: 1px solid #333;
@@ -695,6 +727,28 @@
       return '<pre>' + escaped + '</pre>';
     }
 
+    const PERSONA_DESCRIPTIONS = {
+      security: 'Focus on security vulnerabilities, auth flaws, injection risks, and data exposure.',
+      performance: 'Focus on performance bottlenecks, memory usage, query efficiency, caching, and scalability.',
+      architecture: 'Focus on code organization, separation of concerns, extensibility, and design patterns.',
+      reliability: 'Focus on error handling, edge cases, failure modes, data integrity, and operational concerns.',
+      maintainability: 'Focus on code clarity, test coverage, documentation gaps, tech debt, and onboarding friction.',
+    };
+
+    function getAgentPersona(agentId, providers) {
+      const p = providers.find(p => p.agent_id === agentId);
+      return p ? p.persona : null;
+    }
+
+    function renderPersonaBadge(persona) {
+      if (!persona) return '';
+      const desc = PERSONA_DESCRIPTIONS[persona] || '';
+      const tooltip = desc ? ' title="' + escapeHtml(desc) + '"' : '';
+      return ' <span class="persona-badge">' + escapeHtml(persona) +
+        (desc ? ' <span class="persona-help"' + tooltip + '>?</span>' : '') +
+        '</span>';
+    }
+
     function extractTldr(content) {
       // Extract TL;DR section from markdown — everything between ### TL;DR and the next ### heading
       const match = content.match(/###?\s*TL;?DR\s*\n([\s\S]*?)(?=\n###?\s|\n##\s|$)/i);
@@ -777,7 +831,8 @@
       const badges = providers.map((p, i) => {
         const color = AGENT_COLORS[i % AGENT_COLORS.length];
         const bg = hexToRgba(color, 0.15);
-        return '<span class="badge" style="background:' + bg + ';color:' + color + '">' + escapeHtml(p.agent_id) + '</span>';
+        const personaLabel = p.persona ? ' (' + escapeHtml(p.persona) + ')' : '';
+        return '<span class="badge" style="background:' + bg + ';color:' + color + '">' + escapeHtml(p.agent_id) + personaLabel + '</span>';
       }).join('');
 
       // Phase nav
@@ -793,10 +848,12 @@
           ? renderMarkdown(tldr)
           : renderMarkdown(r.content.split('\n').slice(0, 5).join('\n'));
         const fullHtml = renderMarkdown(r.content);
+        const persona = getAgentPersona(r.agent_id, providers);
         return '<div class="agent-card">' +
           '<div class="agent-card-header">' +
             '<div class="agent-dot" style="background:' + color + '"></div>' +
             '<span class="agent-name" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</span>' +
+            renderPersonaBadge(persona) +
           '</div>' +
           '<div class="agent-card-body">' +
             '<div id="' + cardId + '-tldr">' + tldrHtml + '</div>' +
@@ -865,11 +922,12 @@
         responses.forEach(r => {
           const color = getAgentColor(r.agent_id, providers);
           const initials = getInitials(r.agent_id);
+          const persona = getAgentPersona(r.agent_id, providers);
           const content = styleChatContent(renderMarkdown(r.content));
           chatHtml += '<div class="chat-msg">' +
             '<div class="chat-avatar" style="background:' + color + '">' + initials + '</div>' +
             '<div class="chat-bubble">' +
-              '<div class="chat-sender" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</div>' +
+              '<div class="chat-sender" style="color:' + color + '">' + escapeHtml(r.agent_id) + renderPersonaBadge(persona) + '</div>' +
               content +
             '</div></div>';
         });
