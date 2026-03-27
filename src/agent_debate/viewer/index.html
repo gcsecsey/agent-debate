@@ -507,6 +507,57 @@
     }
 
     /* Synthesis */
+    .synthesis-highlights {
+      background: rgba(59,130,246,0.05);
+      border: 1px solid rgba(59,130,246,0.2);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #ccc;
+    }
+    .synthesis-highlights h2 {
+      color: #ddd;
+      font-size: 15px;
+      margin: 16px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(59,130,246,0.15);
+    }
+    .synthesis-highlights h2:first-of-type { margin-top: 0; }
+    .synthesis-highlights p { margin-bottom: 8px; }
+    .synthesis-highlights ul { margin: 4px 0 8px 20px; }
+    .synthesis-highlights li { margin-bottom: 4px; }
+    .synthesis-highlights table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 12px 0;
+    }
+    .synthesis-highlights th {
+      text-align: left;
+      padding: 8px 12px;
+      background: rgba(59,130,246,0.08);
+      color: #888;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid rgba(59,130,246,0.15);
+    }
+    .synthesis-highlights td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(59,130,246,0.08);
+      vertical-align: top;
+    }
+    .highlights-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #3b82f6;
+      margin-bottom: 12px;
+    }
+
     .synthesis-box {
       background: #111;
       border: 1px solid #1e1e1e;
@@ -934,14 +985,45 @@
         debateContent = '<div class="chat-thread">' + chatHtml + '</div>';
       }
 
-      // Synthesis — extract first section as summary, rest is expandable
+      // Synthesis — extract highlights (recommendation + next steps) into a top card
       let synthesisHtml = '';
       if (data.synthesis && data.synthesis.content) {
         const raw = data.synthesis.content;
-        // Split on ## headings to find first meaningful section
         const sections = raw.split(/(?=^##\s)/m).filter(s => s.trim());
-        if (sections.length > 1) {
-          // First section (or two short sections) as summary
+
+        // Find key sections by heading content
+        const recommendationSection = sections.find(s => /^##\s*(Recommendation|Bottom Line)/im.test(s));
+        const nextStepsSection = sections.find(s => /^##\s*Next Steps/im.test(s));
+        // Also look for a "bottom line" paragraph at the end (often after next steps)
+        const bottomLineMatch = raw.match(/\*\*Bottom line:\*\*[^\n]*/i);
+
+        const hasHighlights = recommendationSection || nextStepsSection || bottomLineMatch;
+
+        if (hasHighlights) {
+          // Build highlights card
+          let highlightsMd = '';
+          if (recommendationSection) {
+            highlightsMd += recommendationSection.trim() + '\n\n';
+          }
+          if (nextStepsSection) {
+            highlightsMd += nextStepsSection.trim() + '\n\n';
+          }
+          if (bottomLineMatch && !recommendationSection) {
+            // Only add standalone bottom line if there's no Recommendation section
+            highlightsMd += bottomLineMatch[0] + '\n\n';
+          }
+
+          synthesisHtml =
+            '<div class="synthesis-highlights">' +
+              '<div class="highlights-label">Highlights</div>' +
+              renderMarkdown(highlightsMd) +
+            '</div>' +
+            '<div class="synthesis-box">' +
+              '<div id="synthesis-full" style="display:none">' + renderMarkdown(raw) + '</div>' +
+              '<button class="expand-toggle" onclick="toggleSynthesis(this)">Show full synthesis</button>' +
+            '</div>';
+        } else if (sections.length > 1) {
+          // No clear highlights — fall back to first 2 sections as summary
           const summaryMd = sections.slice(0, 2).join('\n');
           const restMd = sections.slice(2).join('\n');
           synthesisHtml =
