@@ -68,14 +68,16 @@ async def call_llm(prompt: str, model: str = "haiku") -> tuple[str, dict[str, in
                 if isinstance(block, TextBlock):
                     result_chunks.append(block.text)
             if hasattr(message, "usage") and message.usage is not None:
-                u = message.usage if isinstance(message.usage, dict) else {}
+                u = message.usage
+                # usage may be a dict or an object with attributes
+                _get = u.get if isinstance(u, dict) else lambda k, d=0: getattr(u, k, d)
                 # Include cached tokens in the total input count
                 inp = (
-                    u.get("input_tokens", 0)
-                    + u.get("cache_creation_input_tokens", 0)
-                    + u.get("cache_read_input_tokens", 0)
+                    _get("input_tokens", 0)
+                    + _get("cache_creation_input_tokens", 0)
+                    + _get("cache_read_input_tokens", 0)
                 )
-                out = u.get("output_tokens", 0)
+                out = _get("output_tokens", 0)
                 usage_info = {
                     "input_tokens": inp,
                     "output_tokens": out,

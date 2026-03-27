@@ -118,10 +118,10 @@ async def _run_synthesis_eval(
     prompt: str,
     responses: list[AgentResponse],
     expected_output: dict | None,
-) -> tuple[str, str, dict | None, dict | None, list[tuple[str, float, str]]]:
+) -> tuple[str, str, str, str, dict | None, dict | None, list[tuple[str, float, str]]]:
     """Run one synthesis eval iteration (dedup + synthesis chain).
 
-    Returns (dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores).
+    Returns (dedup_prompt, synthesis_prompt, dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores).
     """
     expected = expected_output or {}
 
@@ -179,7 +179,7 @@ async def _run_synthesis_eval(
             dedup_usage, synthesis_usage, TOKEN_BUDGETS["total_orchestrator"]
         ),
     ]
-    return dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores
+    return dedup_prompt, synthesis_prompt, dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores
 
 
 def _aggregate_scores(
@@ -319,7 +319,7 @@ async def run_baseline(num_runs: int) -> None:
             expected = item.expected_output if item.expected_output else {}
 
             console.print(f"  synthesis [{scenario}] ...", end=" ")
-            dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores = (
+            dedup_prompt, synthesis_prompt, dedup_raw, synthesis_raw, dedup_usage, synthesis_usage, scores = (
                 await _run_synthesis_eval(prompt, responses, expected)
             )
             all_synthesis_scores.append(scores)
@@ -342,14 +342,14 @@ async def run_baseline(num_runs: int) -> None:
             trace.generation(
                 name="dedup_call",
                 model="haiku",
-                input=dedup_raw,
+                input=dedup_prompt,
                 output=dedup_raw,
                 usage=dedup_usage,
             )
             trace.generation(
                 name="synthesis_call",
                 model="sonnet",
-                input=synthesis_raw,
+                input=synthesis_prompt,
                 output=synthesis_raw,
                 usage=synthesis_usage,
             )
