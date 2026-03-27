@@ -22,12 +22,13 @@ dev = [
     "pytest-anyio>=0.0.0",
 ]
 tracing = [
-    "langfuse>=2.0",
+    "langfuse>=2.0,<3.0",
     "python-dotenv>=1.0",
 ]
 eval = [
-    "langfuse>=2.0",
+    "langfuse>=2.0,<3.0",
     "python-dotenv>=1.0",
+    "socksio>=1.0",
 ]
 
 [project.scripts]

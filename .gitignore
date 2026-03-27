@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+
+# Eval baseline snapshots (generated, local artifacts)
+tests/evals/baselines/*.json
