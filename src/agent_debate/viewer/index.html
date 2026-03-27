@@ -44,6 +44,43 @@
       margin-top: 6px;
     }
 
+    /* Personas section */
+    .personas-section {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid #1a1a1a;
+    }
+    .personas-header {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #555;
+      margin-bottom: 16px;
+    }
+    .personas-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .persona-card {
+      background: #111;
+      border: 1px solid #1e1e1e;
+      border-radius: 8px;
+      padding: 14px 18px;
+    }
+    .persona-card-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ddd;
+      margin-bottom: 6px;
+    }
+    .persona-card-desc {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.5;
+    }
+
     /* Debate list */
     .debate-list {
       display: flex;
@@ -729,12 +766,30 @@
         listHtml = `<div class="debate-list">${debates.map(renderDebateCard).join('')}</div>`;
       }
 
+      // Build personas section
+      const personaNames = Object.keys(PERSONA_DATA);
+      let personasHtml = '';
+      if (personaNames.length > 0) {
+        const cards = personaNames.map(name => {
+          const p = PERSONA_DATA[name];
+          return '<div class="persona-card">' +
+            '<div class="persona-card-name">' + escapeHtml(p.label || p.name) + '</div>' +
+            '<div class="persona-card-desc">' + escapeHtml(p.description || '') + '</div>' +
+          '</div>';
+        }).join('');
+        personasHtml = '<div class="personas-section">' +
+          '<div class="personas-header">Available Personas</div>' +
+          '<div class="personas-grid">' + cards + '</div>' +
+        '</div>';
+      }
+
       app.innerHTML = `
         <div class="landing-header">
           <h1>agent-debate</h1>
           <p>Past debate runs</p>
         </div>
         ${listHtml}
+        ${personasHtml}
       `;
 
       // Attach click handlers
