@@ -311,6 +311,21 @@
     .agent-card-body p { margin-bottom: 8px; }
     .agent-card-body ul { margin: 4px 0 8px 20px; }
     .agent-card-body li { margin-bottom: 4px; }
+    .expand-toggle {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 12px;
+      transition: all 0.15s;
+    }
+    .expand-toggle:hover {
+      border-color: #555;
+      color: #ccc;
+    }
 
     /* Analysis: findings table */
     .findings-table {
@@ -627,6 +642,26 @@
       return '<pre>' + escaped + '</pre>';
     }
 
+    function extractTldr(content) {
+      // Extract TL;DR section from markdown — everything between ### TL;DR and the next ### heading
+      const match = content.match(/###?\s*TL;?DR\s*\n([\s\S]*?)(?=\n###?\s|\n##\s|$)/i);
+      return match ? match[1].trim() : null;
+    }
+
+    function toggleOpening(cardId, btn) {
+      const tldr = document.getElementById(cardId + '-tldr');
+      const full = document.getElementById(cardId + '-full');
+      if (full.style.display === 'none') {
+        tldr.style.display = 'none';
+        full.style.display = 'block';
+        btn.textContent = 'Show TL;DR only';
+      } else {
+        tldr.style.display = 'block';
+        full.style.display = 'none';
+        btn.textContent = 'Show full response';
+      }
+    }
+
     function getAgentColor(agentId, providers) {
       const idx = providers.findIndex(p => p.agent_id === agentId);
       return AGENT_COLORS[idx >= 0 ? idx % AGENT_COLORS.length : 0];
@@ -686,14 +721,24 @@
       const debateNavClass = debateDisabled ? ' class="disabled"' : '';
 
       // Opening statements
-      const openingCards = (data.opening.responses || []).map(r => {
+      const openingCards = (data.opening.responses || []).map((r, idx) => {
         const color = getAgentColor(r.agent_id, providers);
+        const tldr = extractTldr(r.content);
+        const cardId = 'opening-card-' + idx;
+        const tldrHtml = tldr
+          ? renderMarkdown(tldr)
+          : renderMarkdown(r.content.split('\n').slice(0, 5).join('\n'));
+        const fullHtml = renderMarkdown(r.content);
         return '<div class="agent-card">' +
           '<div class="agent-card-header">' +
             '<div class="agent-dot" style="background:' + color + '"></div>' +
             '<span class="agent-name" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</span>' +
           '</div>' +
-          '<div class="agent-card-body">' + renderMarkdown(r.content) + '</div>' +
+          '<div class="agent-card-body">' +
+            '<div id="' + cardId + '-tldr">' + tldrHtml + '</div>' +
+            '<div id="' + cardId + '-full" style="display:none">' + fullHtml + '</div>' +
+            '<button class="expand-toggle" onclick="toggleOpening(\'' + cardId + '\', this)">Show full response</button>' +
+          '</div>' +
         '</div>';
       }).join('');
 
@@ -811,6 +856,14 @@
             '<div class="synthesis-box">' + synthesisContent + '</div>' +
           '</section>' +
         '</div>';
+
+      // Dynamically position sticky phase-nav below the header
+      const header = app.querySelector('.header');
+      const nav = app.querySelector('.phase-nav');
+      if (header && nav) {
+        const headerHeight = header.offsetHeight;
+        nav.style.top = headerHeight + 'px';
+      }
 
       // Phase nav click handlers
       app.querySelectorAll('.phase-nav a:not(.disabled)').forEach(a => {
