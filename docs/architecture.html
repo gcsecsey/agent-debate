@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agent-debate Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    padding: 60px 40px;
+    line-height: 1.6;
+  }
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 60px;
+  }
+  .flow {
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  /* Arrow connector */
+  .arrow {
+    width: 2px;
+    height: 32px;
+    background: #333;
+    position: relative;
+  }
+  .arrow::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid #333;
+  }
+
+  /* Fan-out arrows */
+  .fan-out {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0;
+    position: relative;
+    width: 100%;
+    padding-top: 20px;
+  }
+  .fan-out::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 2px;
+    height: 20px;
+    background: #333;
+    transform: translateX(-50%);
+  }
+  .fan-line {
+    position: absolute;
+    top: 20px;
+    height: 2px;
+    background: #333;
+  }
+
+  /* Boxes */
+  .box {
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 12px;
+    padding: 24px 32px;
+    width: 100%;
+    max-width: 800px;
+  }
+  .box-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #555;
+    margin-bottom: 8px;
+  }
+  .box-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+  .box-desc {
+    font-size: 14px;
+    color: #888;
+  }
+
+  /* Prompt box */
+  .prompt-box {
+    background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.1));
+    border-color: rgba(59,130,246,0.3);
+    text-align: center;
+  }
+  .prompt-box .box-title {
+    font-size: 16px;
+    font-style: italic;
+    color: #ccc;
+    font-weight: 400;
+  }
+
+  /* Agent cards */
+  .agents-row {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    max-width: 800px;
+  }
+  .agent-card {
+    flex: 1;
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+  }
+  .agent-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+  .agent-name {
+    font-size: 14px;
+    font-weight: 600;
+    font-family: monospace;
+    margin-bottom: 4px;
+  }
+  .agent-persona {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 10px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+  .agent-quote {
+    font-size: 12px;
+    color: #888;
+    font-style: italic;
+    line-height: 1.4;
+  }
+
+  .c1 { border-top: 3px solid #3b82f6; }
+  .c1 .agent-name { color: #3b82f6; }
+  .c1 .agent-persona { background: rgba(59,130,246,0.15); color: #3b82f6; }
+
+  .c2 { border-top: 3px solid #10b981; }
+  .c2 .agent-name { color: #10b981; }
+  .c2 .agent-persona { background: rgba(16,185,129,0.15); color: #10b981; }
+
+  .c3 { border-top: 3px solid #f59e0b; }
+  .c3 .agent-name { color: #f59e0b; }
+  .c3 .agent-persona { background: rgba(245,158,11,0.15); color: #f59e0b; }
+
+  /* Phase label */
+  .phase-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #444;
+    padding: 8px 0;
+  }
+
+  /* Dedup box */
+  .dedup-box {
+    border-color: rgba(245,158,11,0.3);
+  }
+  .finding {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 13px;
+    padding: 4px 0;
+    color: #bbb;
+  }
+  .finding-sev {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    width: 70px;
+  }
+  .sev-important { color: #f59e0b; }
+  .sev-minor { color: #6b7280; }
+
+  .disagreement-box {
+    background: rgba(239,68,68,0.05);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: 12px;
+  }
+  .disagreement-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ef4444;
+    margin-bottom: 8px;
+  }
+  .disagreement-pos {
+    font-size: 12px;
+    color: #999;
+    padding: 2px 0;
+  }
+
+  /* Debate chat */
+  .chat-box { border-color: rgba(6,182,212,0.3); }
+  .chat-msg {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 0;
+  }
+  .chat-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #000;
+    flex-shrink: 0;
+  }
+  .chat-text {
+    font-size: 13px;
+    color: #bbb;
+    line-height: 1.5;
+  }
+  .chat-text strong { color: #ddd; }
+  .concession {
+    border-left: 2px solid #10b981;
+    background: rgba(16,185,129,0.06);
+    padding: 2px 8px;
+    margin: 4px 0;
+    font-size: 12px;
+    color: #999;
+  }
+
+  /* Synthesis */
+  .synthesis-box {
+    border-color: rgba(139,92,246,0.3);
+    background: linear-gradient(135deg, rgba(139,92,246,0.05), rgba(59,130,246,0.05));
+  }
+  .rec {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ddd;
+    margin-bottom: 12px;
+  }
+  .next-steps {
+    list-style: none;
+    padding: 0;
+  }
+  .next-steps li {
+    font-size: 13px;
+    color: #999;
+    padding: 4px 0;
+    padding-left: 20px;
+    position: relative;
+  }
+  .next-steps li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: #555;
+  }
+
+  /* Outputs */
+  .outputs-row {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    max-width: 800px;
+  }
+  .output-card {
+    flex: 1;
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .output-icon { font-size: 24px; margin-bottom: 6px; }
+  .output-name { font-size: 13px; font-weight: 600; color: #ccc; }
+  .output-desc { font-size: 11px; color: #666; margin-top: 2px; }
+
+  /* Decision diamond */
+  .decision {
+    background: #111;
+    border: 1px solid #333;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #888;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .decision-q { color: #ccc; font-weight: 500; }
+  .decision-yes { color: #10b981; }
+  .decision-no { color: #ef4444; }
+</style>
+</head>
+<body>
+
+<h1>agent-debate</h1>
+<p class="subtitle">Multi-agent debate system — fan out, disagree, converge</p>
+
+<div class="flow">
+
+  <!-- User Prompt -->
+  <div class="box prompt-box">
+    <div class="box-label">User Prompt</div>
+    <div class="box-title">"Should we use REST or gRPC for the new API?"</div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Orchestrator -->
+  <div class="box">
+    <div class="box-label">Orchestrator</div>
+    <div class="box-title">Configure &amp; Dispatch</div>
+    <div class="box-desc">Assigns personas, builds prompts, fans out to agents in parallel</div>
+  </div>
+
+  <div class="arrow"></div>
+  <div class="phase-label">Phase 1 — Opening Statements (parallel)</div>
+
+  <!-- Agents -->
+  <div class="agents-row">
+    <div class="agent-card c1">
+      <div class="agent-icon">🤖</div>
+      <div class="agent-name">claude:opus</div>
+      <div class="agent-persona">Security</div>
+      <div class="agent-quote">"gRPC internally, REST gateway for public APIs"</div>
+    </div>
+    <div class="agent-card c2">
+      <div class="agent-name" style="margin-top: 36px;">codex</div>
+      <div class="agent-persona">Performance</div>
+      <div class="agent-quote">"All-in on gRPC — gRPC-Web handles browsers"</div>
+    </div>
+    <div class="agent-card c3">
+      <div class="agent-name" style="margin-top: 36px;">gemini</div>
+      <div class="agent-persona">Architecture</div>
+      <div class="agent-quote">"REST for everything. Start simple."</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+  <div class="phase-label">Phase 2 — Dedup &amp; Analysis</div>
+
+  <!-- Dedup -->
+  <div class="box dedup-box">
+    <div class="box-label">Orchestrator Analysis (Claude Haiku)</div>
+    <div style="margin-bottom: 12px;">
+      <div class="finding"><span class="finding-sev sev-important">Important</span> Schema-first design essential — all 3 agents</div>
+      <div class="finding"><span class="finding-sev sev-important">Important</span> gRPC superior for internal comms — Claude, Codex</div>
+      <div class="finding"><span class="finding-sev sev-minor">Minor</span> Team REST familiarity — Claude, Gemini</div>
+    </div>
+    <div class="disagreement-box">
+      <div class="disagreement-title">Disagreement: Public API format</div>
+      <div class="disagreement-pos"><strong style="color:#3b82f6">claude:opus</strong> — REST gateway for public APIs</div>
+      <div class="disagreement-pos"><strong style="color:#10b981">codex</strong> — gRPC-Web handles browsers fine</div>
+      <div class="disagreement-pos"><strong style="color:#f59e0b">gemini</strong> — REST for everything</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <div class="decision">
+    <span class="decision-q">Disagreements found?</span>
+    <span class="decision-yes">Yes → Debate</span>
+    <span class="decision-no">No → Skip to synthesis</span>
+  </div>
+
+  <div class="arrow"></div>
+  <div class="phase-label">Phase 3 — Targeted Debate (chat-style)</div>
+
+  <!-- Debate -->
+  <div class="box chat-box">
+    <div class="box-label">Agents respond to each other</div>
+    <div class="chat-msg">
+      <div class="chat-avatar" style="background:#3b82f6">CO</div>
+      <div class="chat-text"><strong>claude:opus</strong> — "REST gateway is pragmatic — third-party devs expect OpenAPI docs"</div>
+    </div>
+    <div class="chat-msg">
+      <div class="chat-avatar" style="background:#10b981">CX</div>
+      <div class="chat-text"><strong>codex</strong> <div class="concession">"I'll concede partially — if you have external consumers, a gateway makes sense"</div></div>
+    </div>
+    <div class="chat-msg">
+      <div class="chat-avatar" style="background:#f59e0b">GE</div>
+      <div class="chat-text"><strong>gemini</strong> <div class="concession">"I'll revise — protos from day one is reasonable for greenfield"</div></div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+  <div class="phase-label">Synthesis</div>
+
+  <!-- Synthesis -->
+  <div class="box synthesis-box">
+    <div class="box-label">Final Synthesis (Claude Sonnet)</div>
+    <div class="rec">Recommendation: gRPC-internal, REST-external</div>
+    <ul class="next-steps">
+      <li>Define proto schemas before writing API code</li>
+      <li>Set up gRPC for internal service-to-service calls</li>
+      <li>Add gRPC-Gateway for public-facing REST endpoints</li>
+      <li>Evaluate ConnectRPC for frontend clients</li>
+    </ul>
+  </div>
+
+  <div class="arrow"></div>
+  <div class="phase-label">Outputs</div>
+
+  <!-- Outputs -->
+  <div class="outputs-row">
+    <div class="output-card">
+      <div class="output-icon">📄</div>
+      <div class="output-name">debate.json</div>
+      <div class="output-desc">Structured transcript</div>
+    </div>
+    <div class="output-card">
+      <div class="output-icon">🌐</div>
+      <div class="output-name">Web Viewer</div>
+      <div class="output-desc">agent-debate ui</div>
+    </div>
+    <div class="output-card">
+      <div class="output-icon">📝</div>
+      <div class="output-name">Markdown</div>
+      <div class="output-desc">Per-agent reports</div>
+    </div>
+    <div class="output-card">
+      <div class="output-icon">📊</div>
+      <div class="output-name">Langfuse</div>
+      <div class="output-desc">Optional tracing</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
