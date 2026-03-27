@@ -483,12 +483,65 @@
       font-size: 14px;
       color: #bbb;
     }
-
+    .synthesis-box h1, .synthesis-box h2, .synthesis-box h3 {
+      color: #ddd;
+      font-size: 15px;
+      margin: 20px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .synthesis-box h1:first-child, .synthesis-box h2:first-child, .synthesis-box h3:first-child { margin-top: 0; }
     .synthesis-box h4 { color: #ddd; font-size: 14px; margin: 16px 0 8px; }
     .synthesis-box h4:first-child { margin-top: 0; }
     .synthesis-box p { margin-bottom: 8px; }
     .synthesis-box ul { margin: 4px 0 8px 20px; }
     .synthesis-box li { margin-bottom: 4px; }
+    .synthesis-box table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 12px 0;
+    }
+    .synthesis-box th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #151515;
+      color: #888;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #222;
+    }
+    .synthesis-box td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #1a1a1a;
+      vertical-align: top;
+    }
+    .synthesis-box hr {
+      border: none;
+      border-top: 1px solid #1e1e1e;
+      margin: 16px 0;
+    }
+    .synthesis-box code {
+      background: #1a1a1a;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    .synthesis-box pre {
+      background: #1a1a1a;
+      padding: 12px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+    .synthesis-box blockquote {
+      border-left: 3px solid #333;
+      padding-left: 12px;
+      color: #999;
+      margin: 12px 0;
+    }
   </style>
 </head>
 <body>
@@ -662,6 +715,17 @@
       }
     }
 
+    function toggleSynthesis(btn) {
+      const full = document.getElementById('synthesis-full');
+      if (full.style.display === 'none') {
+        full.style.display = 'block';
+        btn.textContent = 'Show summary only';
+      } else {
+        full.style.display = 'none';
+        btn.textContent = 'Show full synthesis';
+      }
+    }
+
     function getAgentColor(agentId, providers) {
       const idx = providers.findIndex(p => p.agent_id === agentId);
       return AGENT_COLORS[idx >= 0 ? idx % AGENT_COLORS.length : 0];
@@ -812,10 +876,30 @@
         debateContent = '<div class="chat-thread">' + chatHtml + '</div>';
       }
 
-      // Synthesis
-      const synthesisContent = data.synthesis && data.synthesis.content
-        ? renderMarkdown(data.synthesis.content)
-        : '<p style="color:#666">No synthesis available.</p>';
+      // Synthesis — extract first section as summary, rest is expandable
+      let synthesisHtml = '';
+      if (data.synthesis && data.synthesis.content) {
+        const raw = data.synthesis.content;
+        // Split on ## headings to find first meaningful section
+        const sections = raw.split(/(?=^##\s)/m).filter(s => s.trim());
+        if (sections.length > 1) {
+          // First section (or two short sections) as summary
+          const summaryMd = sections.slice(0, 2).join('\n');
+          const restMd = sections.slice(2).join('\n');
+          synthesisHtml =
+            '<div class="synthesis-box">' +
+              '<div id="synthesis-summary">' + renderMarkdown(summaryMd) + '</div>' +
+              (restMd.trim() ?
+                '<div id="synthesis-full" style="display:none">' + renderMarkdown(restMd) + '</div>' +
+                '<button class="expand-toggle" onclick="toggleSynthesis(this)">Show full synthesis</button>'
+              : '') +
+            '</div>';
+        } else {
+          synthesisHtml = '<div class="synthesis-box">' + renderMarkdown(raw) + '</div>';
+        }
+      } else {
+        synthesisHtml = '<div class="synthesis-box"><p style="color:#666">No synthesis available.</p></div>';
+      }
 
       const app = document.getElementById('app');
       app.style.padding = '0';
@@ -853,7 +937,7 @@
           '</section>' +
           '<section id="synthesis" class="phase">' +
             '<div class="phase-title">Synthesis</div>' +
-            '<div class="synthesis-box">' + synthesisContent + '</div>' +
+            synthesisHtml +
           '</section>' +
         '</div>';
 
