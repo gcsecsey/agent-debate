@@ -80,6 +80,104 @@
       color: #888;
       line-height: 1.5;
     }
+    .personas-section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .personas-section-header .personas-header { margin-bottom: 0; }
+    .add-persona-btn {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 5px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .add-persona-btn:hover { border-color: #555; color: #ccc; }
+    .add-persona-form {
+      background: #111;
+      border: 1px solid #1e1e1e;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .form-row { margin-bottom: 14px; }
+    .form-row label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #ccc;
+      margin-bottom: 4px;
+    }
+    .form-hint {
+      font-weight: 400;
+      color: #555;
+      font-size: 11px;
+    }
+    .form-row input, .form-row textarea {
+      width: 100%;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 8px 12px;
+      color: #ddd;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .form-row input:focus, .form-row textarea:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .form-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .form-cancel {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .form-cancel:hover { border-color: #555; color: #ccc; }
+    .form-submit {
+      background: #3b82f6;
+      border: none;
+      color: #fff;
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .form-submit:hover { background: #2563eb; }
+    .form-error {
+      margin-top: 10px;
+      color: #ef4444;
+      font-size: 13px;
+    }
+    .delete-debate-btn {
+      background: none;
+      border: none;
+      color: #444;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      margin-left: 8px;
+    }
+    .delete-debate-btn:hover { color: #ef4444; }
+    .debate-card-right {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
 
     /* Debate list */
     .debate-list {
@@ -739,7 +837,10 @@
         <div class="debate-card" data-timestamp="${escapeHtml(debate.timestamp)}" role="button" tabindex="0">
           <div class="debate-card-top">
             <span class="debate-prompt">${escapeHtml(prompt)}</span>
-            <span class="debate-time">${escapeHtml(time)}</span>
+            <div class="debate-card-right">
+              <span class="debate-time">${escapeHtml(time)}</span>
+              <button class="delete-debate-btn" data-timestamp="${escapeHtml(debate.timestamp)}" title="Delete debate">&#128465;</button>
+            </div>
           </div>
           <div class="debate-card-bottom">
             ${badges}
@@ -768,20 +869,43 @@
 
       // Build personas section
       const personaNames = Object.keys(PERSONA_DATA);
-      let personasHtml = '';
-      if (personaNames.length > 0) {
-        const cards = personaNames.map(name => {
-          const p = PERSONA_DATA[name];
-          return '<div class="persona-card">' +
-            '<div class="persona-card-name">' + escapeHtml(p.label || p.name) + '</div>' +
-            '<div class="persona-card-desc">' + escapeHtml(p.description || '') + '</div>' +
-          '</div>';
-        }).join('');
-        personasHtml = '<div class="personas-section">' +
-          '<div class="personas-header">Available Personas</div>' +
-          '<div class="personas-grid">' + cards + '</div>' +
+      const cards = personaNames.map(name => {
+        const p = PERSONA_DATA[name];
+        return '<div class="persona-card">' +
+          '<div class="persona-card-name">' + escapeHtml(p.label || p.name) + '</div>' +
+          '<div class="persona-card-desc">' + escapeHtml(p.description || '') + '</div>' +
         '</div>';
-      }
+      }).join('');
+      const personasHtml = '<div class="personas-section">' +
+        '<div class="personas-section-header">' +
+          '<div class="personas-header">Available Personas</div>' +
+          '<button class="add-persona-btn" id="add-persona-btn">+ Add Persona</button>' +
+        '</div>' +
+        '<div id="add-persona-form" class="add-persona-form" style="display:none">' +
+          '<div class="form-row">' +
+            '<label>Name <span class="form-hint">lowercase, used in CLI (e.g. devils_advocate)</span></label>' +
+            '<input type="text" id="persona-name" placeholder="e.g. conspiracy_theorist" />' +
+          '</div>' +
+          '<div class="form-row">' +
+            '<label>Label <span class="form-hint">display name in the UI</span></label>' +
+            '<input type="text" id="persona-label" placeholder="e.g. Conspiracy Theorist" />' +
+          '</div>' +
+          '<div class="form-row">' +
+            '<label>Description <span class="form-hint">what this persona focuses on</span></label>' +
+            '<textarea id="persona-desc" rows="2" placeholder="Questions official narratives and explores alternative explanations."></textarea>' +
+          '</div>' +
+          '<div class="form-row">' +
+            '<label>Instruction <span class="form-hint">optional — auto-generated from description if blank</span></label>' +
+            '<textarea id="persona-instruction" rows="3" placeholder="Leave blank to auto-generate from description"></textarea>' +
+          '</div>' +
+          '<div class="form-actions">' +
+            '<button class="form-cancel" id="persona-cancel">Cancel</button>' +
+            '<button class="form-submit" id="persona-submit">Create Persona</button>' +
+          '</div>' +
+          '<div id="persona-error" class="form-error" style="display:none"></div>' +
+        '</div>' +
+        (cards ? '<div class="personas-grid">' + cards + '</div>' : '') +
+      '</div>';
 
       app.innerHTML = `
         <div class="landing-header">
@@ -792,14 +916,74 @@
         ${personasHtml}
       `;
 
-      // Attach click handlers
+      // Debate card click handlers
       app.querySelectorAll('.debate-card').forEach(card => {
         const ts = card.dataset.timestamp;
-        const navigate = () => { location.hash = '#/debates/' + ts; };
-        card.addEventListener('click', navigate);
-        card.addEventListener('keydown', e => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(); }
+        card.addEventListener('click', e => {
+          if (e.target.closest('.delete-debate-btn')) return;
+          location.hash = '#/debates/' + ts;
         });
+        card.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = '#/debates/' + ts; }
+        });
+      });
+
+      // Delete debate handlers
+      app.querySelectorAll('.delete-debate-btn').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.stopPropagation();
+          const ts = btn.dataset.timestamp;
+          if (!confirm('Delete this debate? This cannot be undone.')) return;
+          try {
+            const res = await fetch('/api/debates/' + ts, { method: 'DELETE' });
+            if (res.ok) loadLanding();
+            else alert('Failed to delete debate');
+          } catch (err) { alert('Failed to delete debate'); }
+        });
+      });
+
+      // Add persona form handlers
+      const addBtn = document.getElementById('add-persona-btn');
+      const form = document.getElementById('add-persona-form');
+      const cancelBtn = document.getElementById('persona-cancel');
+      const submitBtn = document.getElementById('persona-submit');
+      const errorEl = document.getElementById('persona-error');
+
+      if (addBtn) addBtn.addEventListener('click', () => {
+        form.style.display = form.style.display === 'none' ? 'block' : 'none';
+      });
+      if (cancelBtn) cancelBtn.addEventListener('click', () => {
+        form.style.display = 'none';
+        errorEl.style.display = 'none';
+      });
+      if (submitBtn) submitBtn.addEventListener('click', async () => {
+        errorEl.style.display = 'none';
+        const name = document.getElementById('persona-name').value.trim();
+        const label = document.getElementById('persona-label').value.trim();
+        const desc = document.getElementById('persona-desc').value.trim();
+        const instruction = document.getElementById('persona-instruction').value.trim();
+
+        if (!name) { errorEl.textContent = 'Name is required'; errorEl.style.display = 'block'; return; }
+        if (!desc) { errorEl.textContent = 'Description is required'; errorEl.style.display = 'block'; return; }
+
+        try {
+          const res = await fetch('/api/personas', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, label: label || undefined, description: desc, instruction: instruction || undefined }),
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            errorEl.textContent = err.error || 'Failed to create persona';
+            errorEl.style.display = 'block';
+            return;
+          }
+          await loadPersonas();
+          loadLanding();
+        } catch (err) {
+          errorEl.textContent = 'Failed to create persona';
+          errorEl.style.display = 'block';
+        }
       });
     }
 

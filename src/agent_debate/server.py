@@ -83,9 +83,68 @@ class DebateViewerHandler(BaseHTTPRequestHandler):
         else:
             self._error(HTTPStatus.NOT_FOUND, "Not found")
 
-    def _json_response(self, data: object) -> None:
+    def do_POST(self) -> None:
+        if self.path == "/api/personas":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self._error(HTTPStatus.BAD_REQUEST, "Invalid JSON")
+                return
+
+            # Validate required fields
+            name = data.get("name", "").strip()
+            if not name:
+                self._error(HTTPStatus.BAD_REQUEST, "Missing 'name' field")
+                return
+            if not name.replace("_", "").replace("-", "").isalnum():
+                self._error(HTTPStatus.BAD_REQUEST, "Name must be alphanumeric (with _ or -)")
+                return
+
+            from .personas import PERSONAS_DIR
+            persona = {
+                "name": name,
+                "label": data.get("label", name.replace("_", " ").title()),
+                "description": data.get("description", ""),
+                "instruction": data.get("instruction", ""),
+            }
+
+            # Auto-generate instruction if not provided
+            if not persona["instruction"] and persona["description"]:
+                persona["instruction"] = (
+                    f"You are analyzing this from a **{name}** perspective. "
+                    f"{persona['description']}\n\n"
+                    "Still provide a complete analysis, but weight your attention "
+                    "toward your area of expertise."
+                )
+
+            path = PERSONAS_DIR / f"{name}.json"
+            path.write_text(json.dumps(persona, indent=2, ensure_ascii=False) + "\n")
+
+            self._json_response(persona, status=HTTPStatus.CREATED)
+        else:
+            self._error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def do_DELETE(self) -> None:
+        if self.path.startswith("/api/debates/"):
+            timestamp = self.path.split("/api/debates/", 1)[1]
+            if "/" in timestamp or "\\" in timestamp or timestamp.startswith("."):
+                self._error(HTTPStatus.BAD_REQUEST, "Invalid timestamp")
+                return
+            import shutil
+            debate_dir = Path(self.cwd) / DEBATE_SUBDIR / timestamp
+            if not debate_dir.is_dir():
+                self._error(HTTPStatus.NOT_FOUND, "Debate not found")
+                return
+            shutil.rmtree(debate_dir)
+            self._json_response({"deleted": timestamp})
+        else:
+            self._error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def _json_response(self, data: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

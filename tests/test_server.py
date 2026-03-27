@@ -153,3 +153,48 @@ def test_api_personas_returns_all(tmp_path: Path) -> None:
             assert "instruction" in data["security"]
     finally:
         server.shutdown()
+
+
+def test_api_create_persona(tmp_path: Path) -> None:
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        url = f"http://localhost:{port}/api/personas"
+        body = json.dumps({
+            "name": "test_persona",
+            "label": "Test Persona",
+            "description": "A test persona for testing.",
+        }).encode()
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 201
+            data = json.loads(resp.read())
+            assert data["name"] == "test_persona"
+            assert data["instruction"]  # auto-generated
+    finally:
+        server.shutdown()
+
+
+def test_api_delete_debate(tmp_path: Path) -> None:
+    dirs = _setup_debates(tmp_path, count=1)
+    ts = dirs[0].name
+    server, port, _ = _start_test_server(str(tmp_path))
+    try:
+        # Verify it exists
+        url = f"http://localhost:{port}/api/debates/{ts}"
+        with urllib.request.urlopen(url) as resp:
+            assert resp.status == 200
+
+        # Delete it
+        req = urllib.request.Request(url, method="DELETE")
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read())
+            assert data["deleted"] == ts
+
+        # Verify it's gone
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(url)
+        assert exc_info.value.code == 404
+    finally:
+        server.shutdown()
