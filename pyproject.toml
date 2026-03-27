@@ -25,6 +25,10 @@ tracing = [
     "langfuse>=2.0",
     "python-dotenv>=1.0",
 ]
+eval = [
+    "langfuse>=2.0",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 agent-debate = "agent_debate.cli:main"
@@ -34,3 +38,6 @@ packages = ["src/agent_debate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "eval: LLM eval tests (hit real APIs, cost money). Run with: pytest -m eval",
+]

@@ -18,6 +18,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-anyio" },
 ]
+eval = [
+    { name = "langfuse" },
+    { name = "python-dotenv" },
+]
 tracing = [
     { name = "langfuse" },
     { name = "python-dotenv" },
@@ -28,13 +32,15 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.0.20" },
     { name = "click", specifier = ">=8.0" },
+    { name = "langfuse", marker = "extra == 'eval'", specifier = ">=2.0" },
     { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-anyio", marker = "extra == 'dev'", specifier = ">=0.0.0" },
+    { name = "python-dotenv", marker = "extra == 'eval'", specifier = ">=1.0" },
     { name = "python-dotenv", marker = "extra == 'tracing'", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13.0" },
 ]
-provides-extras = ["dev", "tracing"]
+provides-extras = ["dev", "tracing", "eval"]
 
 [[package]]
 name = "annotated-types"

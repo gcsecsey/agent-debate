@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .providers import PROVIDERS
 from .types import DebateConfig, ProviderConfig
 
 MODEL_GROUPS: dict[str, str] = {
@@ -16,6 +15,9 @@ def parse_provider_string(spec: str) -> ProviderConfig:
 
     Format: provider[:model][@persona]
     Examples: 'claude', 'claude:opus', 'codex@performance', 'claude:opus@security'
+
+    Does not validate whether the provider exists — that's handled
+    by the orchestrator at init time, which skips unknown/unavailable providers.
     """
     spec = spec.strip()
 
@@ -27,11 +29,6 @@ def parse_provider_string(spec: str) -> ProviderConfig:
     parts = spec.split(":", 1)
     provider = parts[0]
     model = parts[1] if len(parts) > 1 else None
-
-    if provider not in PROVIDERS:
-        available = ", ".join(PROVIDERS.keys())
-        raise ValueError(f"Unknown provider '{provider}'. Available: {available}")
-
     return ProviderConfig(provider=provider, model=model, persona=persona)
 
 

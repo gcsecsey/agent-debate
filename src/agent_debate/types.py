@@ -13,6 +13,7 @@ class EventType(Enum):
     AGENT_STARTED = "agent_started"
     AGENT_CHUNK = "agent_chunk"
     AGENT_COMPLETED = "agent_completed"
+    OPENING_COMPLETE = "opening_complete"
     DEDUP_START = "dedup_start"
     DEDUP_COMPLETE = "dedup_complete"
     TARGETED_DEBATE_START = "targeted_debate_start"

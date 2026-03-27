@@ -19,6 +19,7 @@ Parse the arguments to extract:
 - `--providers` (optional) — comma-separated provider specs or group name (`top`, `fast`), default: `top`
 - `--max-rounds` (optional) — maximum targeted debate rounds (0 to disable), default: `1`
 - `--orchestrator-model` (optional) — model for orchestrator, default: `sonnet`
+- `--opening-only` (optional) — run only the opening arguments phase, default: false
 
 ## Instructions
 
@@ -37,10 +38,22 @@ command -v agent-debate && agent-debate discover
 
 ### Step 2A: Package Mode
 
-Run the analysis via the Python package. This supports multi-provider debates (Claude, Codex, Gemini, Amp).
+Run the opening arguments phase first using `--opening-only`:
 
 ```bash
-agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)"
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --opening-only --timeout 120
+```
+
+Note: Use a Bash timeout of at least 300000ms (5 minutes) since agents can take time to respond.
+
+Present the opening arguments output to the user and ask:
+
+> "Here are the opening arguments from all agents. Would you like me to proceed with the debate (agents will cross-examine each other's findings), or are these responses sufficient?"
+
+If the user wants to proceed, run the full analysis:
+
+```bash
+agent-debate run "<prompt>" --providers "<providers>" --max-rounds <max_rounds> --cwd "$(pwd)" --timeout 120
 ```
 
 Read the output and present it to the user. Done.
