@@ -79,8 +79,8 @@ class Orchestrator:
                 "Install at least one provider CLI."
             )
 
-    def _agent_id(self, index: int, pc: ProviderConfig) -> str:
-        """Generate a unique agent ID, handling duplicates."""
+    def _agent_id(self, index: int, pc: ProviderConfig, persona: str | None = None) -> str:
+        """Generate a unique agent ID, including persona if present."""
         base = pc.agent_id
         all_ids = [p.agent_id for p in self.config.providers]
         if all_ids.count(base) > 1:
@@ -89,7 +89,9 @@ class Orchestrator:
                 for i, p in enumerate(self.config.providers[:index])
                 if p.agent_id == base
             )
-            return f"{base}#{occurrence + 1}"
+            base = f"{base}#{occurrence + 1}"
+        if persona and persona != "none":
+            base = f"{base} ({persona})"
         return base
 
     async def run_opening(self, prompt: str) -> AsyncIterator[DebateEvent]:
@@ -286,9 +288,9 @@ class Orchestrator:
         async def run_agent(index: int, pc: ProviderConfig) -> None:
             async with self._semaphore:
                 provider = self._providers[pc.provider]
-                agent_id = self._agent_id(index, pc)
-                full_prompt = build_round1_prompt(prompt)
                 persona = personas[index]
+                agent_id = self._agent_id(index, pc, persona)
+                full_prompt = build_round1_prompt(prompt)
                 system_prompt = get_persona_instruction(persona) if persona else ""
 
                 await queue.put(
@@ -391,7 +393,8 @@ class Orchestrator:
         async def run_debate_agent(index: int, pc: ProviderConfig) -> None:
             async with self._semaphore:
                 provider = self._providers[pc.provider]
-                agent_id = self._agent_id(index, pc)
+                persona = personas[index]
+                agent_id = self._agent_id(index, pc, persona)
 
                 own_prior = response_by_id.get(agent_id)
                 if own_prior is None:
@@ -406,7 +409,6 @@ class Orchestrator:
                     disagreements=disagreements,
                     other_responses=others,
                 )
-                persona = personas[index]
                 system_prompt = get_persona_instruction(persona) if persona else ""
 
                 await queue.put(
