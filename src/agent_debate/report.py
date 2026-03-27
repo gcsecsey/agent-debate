@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -145,10 +146,27 @@ class ReportWriter:
         )
         path.write_text(content)
 
+        if self._json_data["debate"] is None:
+            self._json_data["debate"] = {"responses": []}
+        self._json_data["debate"]["responses"].append({
+            "agent_id": response.agent_id,
+            "provider": response.provider,
+            "model": response.model,
+            "content": response.content,
+        })
+
     def save_synthesis(self, content: str) -> None:
         """Save the final synthesis."""
         (self.run_dir / "synthesis.md").write_text(
             f"# Final Synthesis\n\n{content}\n"
+        )
+        self._json_data["synthesis"] = {"content": content}
+
+    def write_json(self) -> None:
+        """Write the accumulated JSON data to debate.json."""
+        self._json_data["meta"]["completed_at"] = datetime.now().isoformat()
+        (self.run_dir / "debate.json").write_text(
+            json.dumps(self._json_data, indent=2, ensure_ascii=False) + "\n"
         )
 
     def finalize_readme(self, synthesis: str) -> None:
