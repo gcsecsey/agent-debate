@@ -88,3 +88,4 @@ class DebateConfig:
     report_dir: str | None = ".context/debate"
     agent_timeout: int = 300  # seconds, per provider call
     max_parallel: int = 5  # max concurrent agent calls
+    auto_persona: bool = False  # auto-assign personas to agents without one

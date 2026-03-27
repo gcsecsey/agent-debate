@@ -245,11 +245,31 @@ class Orchestrator:
                 self._trace = None
 
     def _resolve_personas(self) -> list[str | None]:
-        """Resolve personas for all providers, auto-assigning if none are explicit."""
+        """Resolve personas for all providers.
+
+        - No explicit @persona on any provider: auto-assign all from rotation
+        - Any explicit @persona: use as-is, unset slots stay None
+        - @none: explicitly skip persona for that agent (resolves to None)
+        - --auto-persona flag: fill unset slots from rotation even when some are explicit
+        """
         explicit = [pc.persona for pc in self.config.providers]
-        if any(p is not None for p in explicit):
-            return explicit
-        return auto_assign_personas(len(self.config.providers))
+        # Normalize @none to None
+        normalized = [None if p == "none" else p for p in explicit]
+
+        has_any_explicit = any(p is not None for p in explicit)
+        if not has_any_explicit:
+            # No one specified anything — auto-assign all
+            return auto_assign_personas(len(normalized))
+
+        if self.config.auto_persona:
+            # Fill unset slots from rotation, but respect @none
+            rotation = auto_assign_personas(len(normalized))
+            return [
+                n if n is not None or explicit[i] == "none" else rotation[i]
+                for i, n in enumerate(normalized)
+            ]
+
+        return normalized
 
     async def _fan_out_streaming(
         self,

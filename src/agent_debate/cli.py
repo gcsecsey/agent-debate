@@ -189,6 +189,7 @@ async def _run(
     agent_timeout: int = 300,
     max_parallel: int = 5,
     opening_only: bool = False,
+    auto_persona: bool = False,
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -199,6 +200,7 @@ async def _run(
         report_dir=report_dir,
         agent_timeout=agent_timeout,
         max_parallel=max_parallel,
+        auto_persona=auto_persona,
     )
 
     requested_agents = {c.agent_id for c in config.providers}
@@ -427,6 +429,12 @@ def main() -> None:
     default=False,
     help="Run only the opening arguments phase (skip debate)",
 )
+@click.option(
+    "--auto-persona",
+    is_flag=True,
+    default=False,
+    help="Auto-assign personas to agents that don't have one (use @none to skip)",
+)
 def run(
     prompt: str,
     providers: str,
@@ -437,6 +445,7 @@ def run(
     max_parallel: int,
     no_report: bool,
     opening_only: bool,
+    auto_persona: bool,
 ) -> None:
     """Run a multi-perspective analysis.
 
@@ -454,7 +463,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only, auto_persona
     )
 
 
