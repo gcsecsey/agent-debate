@@ -53,6 +53,18 @@ def build_round1_prompt(user_prompt: str) -> str:
 # --- Helpers ---
 
 
+def _trim_to_paragraph_boundary(content: str, max_chars: int = 2000) -> str:
+    """Truncate content at a clean paragraph boundary within max_chars."""
+    if len(content) <= max_chars:
+        return content
+    # Find the last double-newline before the budget
+    truncated = content[:max_chars]
+    last_break = truncated.rfind("\n\n")
+    if last_break > max_chars // 2:
+        truncated = truncated[:last_break]
+    return truncated.rstrip() + "\n\n[... truncated]"
+
+
 def _format_response_simple(response: AgentResponse) -> str:
     """Format an agent response for judge-facing prompts."""
     return f"**{response.agent_id}**:\n\n{response.content}"
@@ -188,10 +200,6 @@ TARGETED_DEBATE_TEMPLATE = """\
 You are responding to contradictions identified between your analysis \
 and other agents' analyses.
 
-## Original Request (summary)
-
-{prompt_summary}
-
 ## Your Previous Positions
 
 {own_positions}
@@ -246,7 +254,6 @@ def build_targeted_debate_prompt(
     )
 
     return TARGETED_DEBATE_TEMPLATE.format(
-        prompt_summary=_summarize_prompt(user_prompt),
         own_positions=own_positions,
         disagreements=disagreements_text,
         other_positions=other_positions,
@@ -316,9 +323,19 @@ def build_synthesis_prompt(
 
     debate_section = ""
     if debate_responses:
+        trimmed_debate = [
+            AgentResponse(
+                agent_id=r.agent_id,
+                provider=r.provider,
+                model=r.model,
+                round_number=r.round_number,
+                content=_trim_to_paragraph_boundary(r.content),
+            )
+            for r in debate_responses
+        ]
         debate_section = (
             "## Targeted Debate Responses\n\n"
-            + _format_responses(debate_responses)
+            + _format_responses(trimmed_debate)
         )
 
     return SYNTHESIS_TEMPLATE.format(

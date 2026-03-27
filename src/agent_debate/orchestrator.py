@@ -15,6 +15,7 @@ from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, TextBlock
 
 from . import tracing
+from .personas import auto_assign_personas, get_persona_instruction
 from .prompts import (
     build_dedup_prompt,
     build_round1_prompt,
@@ -42,6 +43,7 @@ class Orchestrator:
         self.config = config
         self._providers: dict[str, BaseProvider] = {}
         self._report: ReportWriter | None = None
+        self._semaphore = asyncio.Semaphore(config.max_parallel)
         self._trace: Any = None
         self._init_providers()
 
@@ -235,6 +237,13 @@ class Orchestrator:
                 tracing.end_trace(self._trace)
                 self._trace = None
 
+    def _resolve_personas(self) -> list[str | None]:
+        """Resolve personas for all providers, auto-assigning if none are explicit."""
+        explicit = [pc.persona for pc in self.config.providers]
+        if any(p is not None for p in explicit):
+            return explicit
+        return auto_assign_personas(len(self.config.providers))
+
     async def _fan_out_streaming(
         self,
         prompt: str,
@@ -245,82 +254,86 @@ class Orchestrator:
         queue: asyncio.Queue[DebateEvent | AgentResponse | None] = asyncio.Queue()
         agents = list(enumerate(self.config.providers))
         total = len(agents)
+        personas = self._resolve_personas()
 
         async def run_agent(index: int, pc: ProviderConfig) -> None:
-            provider = self._providers[pc.provider]
-            agent_id = self._agent_id(index, pc)
-            full_prompt = build_round1_prompt(prompt)
+            async with self._semaphore:
+                provider = self._providers[pc.provider]
+                agent_id = self._agent_id(index, pc)
+                full_prompt = build_round1_prompt(prompt)
+                persona = personas[index]
+                system_prompt = get_persona_instruction(persona) if persona else ""
 
-            await queue.put(
-                DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
-            )
+                await queue.put(
+                    DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
+                )
 
-            try:
-                chunks: list[str] = []
+                try:
+                    chunks: list[str] = []
 
-                async def _stream() -> None:
-                    async for chunk in provider.analyze(
-                        prompt=full_prompt,
-                        system_prompt="",
-                        cwd=self.config.cwd,
-                        model=pc.model,
-                    ):
-                        chunks.append(chunk)
-                        await queue.put(
-                            DebateEvent(
-                                type=EventType.AGENT_CHUNK,
-                                agent_id=agent_id,
-                                round_number=round_number,
-                                content=chunk,
+                    async def _stream() -> None:
+                        async for chunk in provider.analyze(
+                            prompt=full_prompt,
+                            system_prompt=system_prompt,
+                            cwd=self.config.cwd,
+                            model=pc.model,
+                        ):
+                            chunks.append(chunk)
+                            await queue.put(
+                                DebateEvent(
+                                    type=EventType.AGENT_CHUNK,
+                                    agent_id=agent_id,
+                                    round_number=round_number,
+                                    content=chunk,
+                                )
                             )
-                        )
 
-                await asyncio.wait_for(
-                    _stream(), timeout=self.config.agent_timeout
-                )
+                    await asyncio.wait_for(
+                        _stream(), timeout=self.config.agent_timeout
+                    )
 
-                content = "".join(chunks)
-                response = AgentResponse(
-                    agent_id=agent_id,
-                    provider=pc.provider,
-                    model=pc.model,
-                    round_number=round_number,
-                    content=content,
-                )
-                if span is not None:
-                    tracing.log_generation(
-                        span,
-                        name=agent_id,
+                    content = "".join(chunks)
+                    response = AgentResponse(
+                        agent_id=agent_id,
+                        provider=pc.provider,
                         model=pc.model,
-                        input=full_prompt,
-                        output=content,
-                    )
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.AGENT_COMPLETED,
-                        agent_id=agent_id,
                         round_number=round_number,
+                        content=content,
                     )
-                )
-                await queue.put(response)
-            except asyncio.TimeoutError:
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.ERROR,
-                        agent_id=agent_id,
-                        content=f"Agent timed out after {self.config.agent_timeout}s",
+                    if span is not None:
+                        tracing.log_generation(
+                            span,
+                            name=agent_id,
+                            model=pc.model,
+                            input=full_prompt,
+                            output=content,
+                        )
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.AGENT_COMPLETED,
+                            agent_id=agent_id,
+                            round_number=round_number,
+                        )
                     )
-                )
-            except Exception as exc:
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.ERROR,
-                        agent_id=agent_id,
-                        content=str(exc),
+                    await queue.put(response)
+                except asyncio.TimeoutError:
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.ERROR,
+                            agent_id=agent_id,
+                            content=f"Agent timed out after {self.config.agent_timeout}s",
+                        )
                     )
-                )
-            finally:
-                await queue.put(None)
+                except Exception as exc:
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.ERROR,
+                            agent_id=agent_id,
+                            content=str(exc),
+                        )
+                    )
+                finally:
+                    await queue.put(None)
 
         for index, provider_config in agents:
             asyncio.create_task(run_agent(index, provider_config))
@@ -346,94 +359,99 @@ class Orchestrator:
         total = len(agents)
         response_by_id = {r.agent_id: r for r in prior_responses}
 
+        personas = self._resolve_personas()
+
         async def run_debate_agent(index: int, pc: ProviderConfig) -> None:
-            provider = self._providers[pc.provider]
-            agent_id = self._agent_id(index, pc)
+            async with self._semaphore:
+                provider = self._providers[pc.provider]
+                agent_id = self._agent_id(index, pc)
 
-            own_prior = response_by_id.get(agent_id)
-            if own_prior is None:
-                await queue.put(None)
-                return
+                own_prior = response_by_id.get(agent_id)
+                if own_prior is None:
+                    await queue.put(None)
+                    return
 
-            # Build a combined prompt addressing all disagreements
-            others = [r for r in prior_responses if r.agent_id != agent_id]
-            full_prompt = build_targeted_debate_prompt(
-                user_prompt=prompt,
-                own_response=own_prior,
-                disagreements=disagreements,
-                other_responses=others,
-            )
+                # Build a combined prompt addressing all disagreements
+                others = [r for r in prior_responses if r.agent_id != agent_id]
+                full_prompt = build_targeted_debate_prompt(
+                    user_prompt=prompt,
+                    own_response=own_prior,
+                    disagreements=disagreements,
+                    other_responses=others,
+                )
+                persona = personas[index]
+                system_prompt = get_persona_instruction(persona) if persona else ""
 
-            await queue.put(
-                DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
-            )
+                await queue.put(
+                    DebateEvent(type=EventType.AGENT_STARTED, agent_id=agent_id)
+                )
 
-            try:
-                chunks: list[str] = []
+                try:
+                    chunks: list[str] = []
 
-                async def _stream() -> None:
-                    async for chunk in provider.analyze(
-                        prompt=full_prompt,
-                        system_prompt="",
-                        cwd=self.config.cwd,
-                        model=pc.model,
-                    ):
-                        chunks.append(chunk)
-                        await queue.put(
-                            DebateEvent(
-                                type=EventType.AGENT_CHUNK,
-                                agent_id=agent_id,
-                                round_number=2,
-                                content=chunk,
+                    async def _stream() -> None:
+                        async for chunk in provider.analyze(
+                            prompt=full_prompt,
+                            system_prompt=system_prompt,
+                            cwd=self.config.cwd,
+                            model=pc.model,
+                        ):
+                            chunks.append(chunk)
+                            await queue.put(
+                                DebateEvent(
+                                    type=EventType.AGENT_CHUNK,
+                                    agent_id=agent_id,
+                                    round_number=2,
+                                    content=chunk,
+                                )
                             )
-                        )
 
-                await asyncio.wait_for(
-                    _stream(), timeout=self.config.agent_timeout
-                )
+                    await asyncio.wait_for(
+                        _stream(), timeout=self.config.agent_timeout
+                    )
 
-                content = "".join(chunks)
-                response = AgentResponse(
-                    agent_id=agent_id,
-                    provider=pc.provider,
-                    model=pc.model,
-                    round_number=2,
-                    content=content,
-                )
-                if span is not None:
-                    tracing.log_generation(
-                        span,
-                        name=agent_id,
+                    content = "".join(chunks)
+                    response = AgentResponse(
+                        agent_id=agent_id,
+                        provider=pc.provider,
                         model=pc.model,
-                        input=full_prompt,
-                        output=content,
-                    )
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.AGENT_COMPLETED,
-                        agent_id=agent_id,
                         round_number=2,
+                        content=content,
                     )
-                )
-                await queue.put(response)
-            except asyncio.TimeoutError:
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.ERROR,
-                        agent_id=agent_id,
-                        content=f"Agent timed out after {self.config.agent_timeout}s",
+                    if span is not None:
+                        tracing.log_generation(
+                            span,
+                            name=agent_id,
+                            model=pc.model,
+                            input=full_prompt,
+                            output=content,
+                        )
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.AGENT_COMPLETED,
+                            agent_id=agent_id,
+                            round_number=2,
+                        )
                     )
-                )
-            except Exception as exc:
-                await queue.put(
-                    DebateEvent(
-                        type=EventType.ERROR,
-                        agent_id=agent_id,
-                        content=str(exc),
+                    await queue.put(response)
+                except asyncio.TimeoutError:
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.ERROR,
+                            agent_id=agent_id,
+                            content=f"Agent timed out after {self.config.agent_timeout}s",
+                        )
                     )
-                )
-            finally:
-                await queue.put(None)
+                except Exception as exc:
+                    await queue.put(
+                        DebateEvent(
+                            type=EventType.ERROR,
+                            agent_id=agent_id,
+                            content=str(exc),
+                        )
+                    )
+                finally:
+                    await queue.put(None)
 
         for index, provider_config in agents:
             asyncio.create_task(run_debate_agent(index, provider_config))

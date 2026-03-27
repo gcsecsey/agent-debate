@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .providers import PROVIDERS
 from .types import DebateConfig, ProviderConfig
 
 MODEL_GROUPS: dict[str, str] = {
@@ -12,15 +11,25 @@ MODEL_GROUPS: dict[str, str] = {
 
 
 def parse_provider_string(spec: str) -> ProviderConfig:
-    """Parse a provider spec like 'claude:opus' or 'codex' into a ProviderConfig.
+    """Parse a provider spec like 'claude:opus@security' into a ProviderConfig.
+
+    Format: provider[:model][@persona]
+    Examples: 'claude', 'claude:opus', 'codex@performance', 'claude:opus@security'
 
     Does not validate whether the provider exists — that's handled
     by the orchestrator at init time, which skips unknown/unavailable providers.
     """
-    parts = spec.strip().split(":", 1)
+    spec = spec.strip()
+
+    # Extract optional @persona suffix
+    persona = None
+    if "@" in spec:
+        spec, persona = spec.rsplit("@", 1)
+
+    parts = spec.split(":", 1)
     provider = parts[0]
     model = parts[1] if len(parts) > 1 else None
-    return ProviderConfig(provider=provider, model=model)
+    return ProviderConfig(provider=provider, model=model, persona=persona)
 
 
 def parse_providers_string(specs: str) -> list[ProviderConfig]:
@@ -55,6 +64,7 @@ def build_config(
     orchestrator_model: str = "sonnet",
     report_dir: str | None = ".context/debate",
     agent_timeout: int = 300,
+    max_parallel: int = 5,
 ) -> DebateConfig:
     """Build a DebateConfig from CLI-style arguments."""
     return DebateConfig(
@@ -64,4 +74,5 @@ def build_config(
         orchestrator_model=orchestrator_model,
         report_dir=report_dir,
         agent_timeout=agent_timeout,
+        max_parallel=max_parallel,
     )

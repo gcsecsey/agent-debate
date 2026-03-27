@@ -187,6 +187,7 @@ async def _run(
     orchestrator_model: str,
     report_dir: str | None,
     agent_timeout: int = 300,
+    max_parallel: int = 5,
     opening_only: bool = False,
 ) -> None:
     """Async entry point for the analysis."""
@@ -197,6 +198,7 @@ async def _run(
         orchestrator_model=orchestrator_model,
         report_dir=report_dir,
         agent_timeout=agent_timeout,
+        max_parallel=max_parallel,
     )
 
     requested_agents = {c.agent_id for c in config.providers}
@@ -408,6 +410,12 @@ def main() -> None:
     help="Timeout per agent call in seconds (default: 300)",
 )
 @click.option(
+    "--max-parallel",
+    default=5,
+    type=int,
+    help="Maximum concurrent agent calls (default: 5)",
+)
+@click.option(
     "--no-report",
     is_flag=True,
     default=False,
@@ -426,6 +434,7 @@ def run(
     cwd: str,
     orchestrator_model: str,
     timeout: int,
+    max_parallel: int,
     no_report: bool,
     opening_only: bool,
 ) -> None:
@@ -445,7 +454,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, opening_only
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only
     )
 
 

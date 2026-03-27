@@ -6,7 +6,7 @@ Inspired by [counselors](https://github.com/aarondfrancis/counselors), but with 
 
 ## How it works
 
-1. Your prompt is sent to multiple AI agents in parallel (e.g. Claude Opus, Codex, Gemini) — all receive the same prompt, with diversity coming from model differences
+1. Your prompt is sent to multiple AI agents in parallel (e.g. Claude Opus, Codex, Gemini) — each agent gets a persona (security, performance, architecture, etc.) for differentiated analysis
 2. An orchestrator (Claude Haiku) extracts and deduplicates findings, then identifies genuine technical contradictions between agents
 3. If contradictions are found, agents debate their positions in a single targeted round, seeing each other's arguments
 4. A final synthesis (Claude Sonnet) presents: key findings, disagreements with both sides' reasoning, a recommended approach, and concrete next steps
@@ -78,20 +78,26 @@ agent-debate run \
 | `--cwd` | `-d` | `.` | Working directory for agents |
 | `--orchestrator-model` | `-m` | `sonnet` | Model for disagreement detection and synthesis |
 | `--timeout` | `-t` | `300` | Timeout per agent call in seconds |
+| `--max-parallel` | | `5` | Maximum concurrent agent calls |
+| `--opening-only` | | `false` | Run only the opening analysis (skip debate) |
 | `--no-report` | | `false` | Disable saving the markdown report |
 
 #### Provider specs
 
-Format: `provider` or `provider:model`
+Format: `provider[:model][@persona]`
 
 ```
-claude:opus      # Claude with Opus model
-claude:sonnet    # Claude with Sonnet model
-codex            # Codex with default model (gpt-5.3-codex)
-codex:o4-mini    # Codex with specific model
-gemini           # Gemini with default model (gemini-2.5-pro)
-amp:deep         # Amp with deep reasoning model
+claude:opus            # Claude with Opus model
+claude:sonnet          # Claude with Sonnet model
+codex                  # Codex with default model (gpt-5.3-codex)
+codex:o4-mini          # Codex with specific model
+gemini                 # Gemini with default model (gemini-2.5-pro)
+amp:deep               # Amp with deep reasoning model
+claude:opus@security   # Claude Opus with security persona
+codex@performance      # Codex with performance persona
 ```
+
+Available personas: `security`, `performance`, `architecture`, `reliability`, `maintainability`. When no personas are specified, they are auto-assigned round-robin.
 
 You can use the same provider multiple times:
 
@@ -154,6 +160,7 @@ anyio.run(main)
 src/agent_debate/
 ├── types.py              # Event, response, config dataclasses
 ├── config.py             # Provider string parsing
+├── personas.py           # Agent persona definitions and auto-assignment
 ├── prompts.py            # Prompt templates for analysis, dedup, debate, synthesis
 ├── providers/
 │   ├── base.py           # Abstract BaseProvider

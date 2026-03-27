@@ -3,6 +3,7 @@
 from agent_debate.prompts import (
     _extract_structured_sections,
     _summarize_prompt,
+    _trim_to_paragraph_boundary,
     build_dedup_prompt,
     build_round1_prompt,
     build_synthesis_prompt,
@@ -176,16 +177,15 @@ class TestTargetedDebatePrompt:
         assert "position_updates" not in result.lower()
         assert "Structured Position Updates" not in result
 
-    def test_truncates_long_prompt(self):
+    def test_no_user_prompt_in_debate(self):
         own = self._make_response("claude:opus", "My analysis")
         disagreement = Disagreement(
             topic="Test",
             positions={"claude:opus": "Pos A"},
         )
-        long_prompt = "y" * 300
-        result = build_targeted_debate_prompt(long_prompt, own, [disagreement], [])
-        assert "y" * 200 + "..." in result
-        assert "y" * 300 not in result
+        result = build_targeted_debate_prompt("Review auth module", own, [disagreement], [])
+        assert "Original Request" not in result
+        assert "Review auth module" not in result
 
     def test_multiple_disagreements(self):
         own = self._make_response("claude:opus", "My analysis")
@@ -220,6 +220,22 @@ class TestTargetedDebatePrompt:
         assert "**JWT vs Sessions**: JWT" in result
         assert "**REST vs gRPC**: REST" in result
         assert "**SQL vs NoSQL**: SQL" in result
+
+
+class TestTrimToParagraphBoundary:
+    def test_short_content_unchanged(self):
+        assert _trim_to_paragraph_boundary("Short text") == "Short text"
+
+    def test_long_content_truncated_at_paragraph(self):
+        content = "First paragraph.\n\nSecond paragraph.\n\n" + "x" * 3000
+        result = _trim_to_paragraph_boundary(content, max_chars=50)
+        assert result == "First paragraph.\n\nSecond paragraph.\n\n[... truncated]"
+
+    def test_no_paragraph_boundary_truncates_at_limit(self):
+        content = "a" * 3000
+        result = _trim_to_paragraph_boundary(content, max_chars=100)
+        assert len(result) <= 120  # 100 + "[... truncated]"
+        assert result.endswith("[... truncated]")
 
 
 class TestSynthesisPrompt:
@@ -261,6 +277,25 @@ class TestSynthesisPrompt:
         )
         assert "Debate response" in result
         assert "Targeted Debate" in result
+
+    def test_debate_responses_trimmed_in_synthesis(self):
+        responses = [
+            AgentResponse("a1", "claude", "opus", 1, "Round 1 content"),
+        ]
+        long_debate = "First point.\n\n" + "x" * 3000
+        debate = [
+            AgentResponse("a1", "claude", "opus", 2, long_debate),
+        ]
+        result = build_synthesis_prompt(
+            "Review auth",
+            responses,
+            "Some findings",
+            [Disagreement("JWT vs Sessions", {"a1": "JWT", "a2": "Sessions"})],
+            debate_responses=debate,
+        )
+        assert "First point." in result
+        assert "[... truncated]" in result
+        assert "x" * 3000 not in result
 
     def test_no_disagreements_message(self):
         responses = [
