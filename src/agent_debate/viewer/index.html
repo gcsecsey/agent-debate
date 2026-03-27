@@ -743,26 +743,26 @@
       if (!data.debate) {
         debateContent = '<div class="no-debate-msg">Agents agreed &mdash; no targeted debate was needed.</div>';
       } else {
-        const rounds = data.debate.rounds || [];
+        const responses = data.debate.responses || [];
         let chatHtml = '';
-        let lastTopic = null;
-        rounds.forEach(round => {
-          const topic = round.topic || '';
-          if (topic !== lastTopic) {
-            chatHtml += '<div class="chat-topic"><span>' + escapeHtml(topic) + '</span></div>';
-            lastTopic = topic;
-          }
-          (round.responses || []).forEach(r => {
-            const color = getAgentColor(r.agent_id, providers);
-            const initials = getInitials(r.agent_id);
-            const content = styleChatContent(renderMarkdown(r.content));
-            chatHtml += '<div class="chat-msg">' +
-              '<div class="chat-avatar" style="background:' + color + '">' + initials + '</div>' +
-              '<div class="chat-bubble">' +
-                '<div class="chat-sender" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</div>' +
-                content +
-              '</div></div>';
-          });
+
+        // Show disagreement topics as dividers
+        const disagreements = (data.dedup && data.dedup.disagreements) || [];
+        if (disagreements.length > 0) {
+          chatHtml += '<div class="chat-topic"><span>' + escapeHtml(disagreements.map(d => d.topic).join(' & ')) + '</span></div>';
+        }
+
+        // Each agent's full debate response as a chat bubble
+        responses.forEach(r => {
+          const color = getAgentColor(r.agent_id, providers);
+          const initials = getInitials(r.agent_id);
+          const content = styleChatContent(renderMarkdown(r.content));
+          chatHtml += '<div class="chat-msg">' +
+            '<div class="chat-avatar" style="background:' + color + '">' + initials + '</div>' +
+            '<div class="chat-bubble">' +
+              '<div class="chat-sender" style="color:' + color + '">' + escapeHtml(r.agent_id) + '</div>' +
+              content +
+            '</div></div>';
         });
         debateContent = '<div class="chat-thread">' + chatHtml + '</div>';
       }
