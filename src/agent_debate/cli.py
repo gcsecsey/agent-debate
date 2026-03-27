@@ -190,6 +190,7 @@ async def _run(
     max_parallel: int = 5,
     opening_only: bool = False,
     auto_persona: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Async entry point for the analysis."""
     config = build_config(
@@ -231,36 +232,53 @@ async def _run(
 
     # Phase 1: Opening arguments
     opening_responses: list[AgentResponse] = []
-    with display.start():
+    if verbose:
+        console.print("[bold blue]Phase 1: Independent Analysis[/bold blue]\n")
         async for event in orchestrator.run_opening(prompt):
             if isinstance(event, AgentResponse):
                 continue
-
             match event.type:
-                case EventType.ROUND_START:
-                    display.set_phase(
-                        "Phase 1: Independent Analysis",
-                        style="blue",
-                    )
                 case EventType.AGENT_STARTED:
-                    display.agent_started(event.agent_id or "unknown")
+                    console.print(f"\n[bold]--- {event.agent_id} started ---[/bold]")
                 case EventType.AGENT_CHUNK:
-                    display.agent_chunk(event.agent_id or "unknown", event.content)
+                    console.out(event.content, end="", highlight=False)
                 case EventType.AGENT_COMPLETED:
-                    display.agent_completed(event.agent_id or "unknown")
+                    console.print(f"\n[dim]--- {event.agent_id} done ---[/dim]")
                 case EventType.OPENING_COMPLETE:
                     opening_responses = event.metadata["responses"]
                 case EventType.ERROR:
-                    display.add_status(
-                        Panel(
-                            f"[bold red]{event.content}[/bold red]",
-                            title=f"Error ({event.agent_id or 'unknown'})",
-                            border_style="red",
-                        )
-                    )
+                    console.print(f"[bold red]ERROR ({event.agent_id}): {event.content}[/bold red]")
+    else:
+        with display.start():
+            async for event in orchestrator.run_opening(prompt):
+                if isinstance(event, AgentResponse):
+                    continue
 
-    # Show short summaries
-    display.print_agent_summaries()
+                match event.type:
+                    case EventType.ROUND_START:
+                        display.set_phase(
+                            "Phase 1: Independent Analysis",
+                            style="blue",
+                        )
+                    case EventType.AGENT_STARTED:
+                        display.agent_started(event.agent_id or "unknown")
+                    case EventType.AGENT_CHUNK:
+                        display.agent_chunk(event.agent_id or "unknown", event.content)
+                    case EventType.AGENT_COMPLETED:
+                        display.agent_completed(event.agent_id or "unknown")
+                    case EventType.OPENING_COMPLETE:
+                        opening_responses = event.metadata["responses"]
+                    case EventType.ERROR:
+                        display.add_status(
+                            Panel(
+                                f"[bold red]{event.content}[/bold red]",
+                                title=f"Error ({event.agent_id or 'unknown'})",
+                                border_style="red",
+                            )
+                        )
+
+        # Show short summaries
+        display.print_agent_summaries()
 
     # Checkpoint
     if opening_only:
@@ -301,57 +319,83 @@ async def _run(
 
     # Phase 2: Debate + synthesis
     synthesis_content = ""
-    display2 = LiveDebateDisplay()
-    with display2.start():
+    if verbose:
         async for event in orchestrator.run_debate(prompt, opening_responses):
             if isinstance(event, AgentResponse):
                 continue
-
             match event.type:
                 case EventType.DEDUP_START:
-                    display2.set_phase(
-                        "Phase 2: Deduplicating Findings",
-                        style="yellow",
-                    )
+                    console.print("\n[bold yellow]Phase 2: Deduplicating Findings[/bold yellow]")
                 case EventType.DEDUP_COMPLETE:
                     fc = event.metadata.get("findings_count", 0)
                     dc = event.metadata.get("disagreements_count", 0)
-                    display2.add_status(
-                        Panel(
-                            f"[bold]{fc} findings[/bold] extracted, "
-                            f"[bold]{dc} stark disagreement(s)[/bold]",
-                            title="[bold yellow]Deduplication Complete[/bold yellow]",
-                            border_style="yellow",
-                        )
-                    )
+                    console.print(f"[yellow]{fc} findings, {dc} disagreement(s)[/yellow]")
                 case EventType.TARGETED_DEBATE_START:
-                    display2.clear_agents()
-                    display2.set_phase(
-                        "Phase 3: Targeted Debate (stark disagreements found)",
-                        style="cyan",
-                    )
+                    console.print("\n[bold cyan]Phase 3: Targeted Debate[/bold cyan]")
                 case EventType.AGENT_STARTED:
-                    display2.agent_started(event.agent_id or "unknown")
+                    console.print(f"\n[bold]--- {event.agent_id} started ---[/bold]")
                 case EventType.AGENT_CHUNK:
-                    display2.agent_chunk(event.agent_id or "unknown", event.content)
+                    console.out(event.content, end="", highlight=False)
                 case EventType.AGENT_COMPLETED:
-                    display2.agent_completed(event.agent_id or "unknown")
+                    console.print(f"\n[dim]--- {event.agent_id} done ---[/dim]")
                 case EventType.SYNTHESIS_START:
-                    display2.clear_agents()
-                    display2.set_phase(
-                        "Synthesizing results...",
-                        style="magenta",
-                    )
+                    console.print("\n[bold magenta]Synthesizing...[/bold magenta]")
                 case EventType.SYNTHESIS_COMPLETE:
                     synthesis_content = event.content
                 case EventType.ERROR:
-                    display2.add_status(
-                        Panel(
-                            f"[bold red]{event.content}[/bold red]",
-                            title=f"Error ({event.agent_id or 'unknown'})",
-                            border_style="red",
+                    console.print(f"[bold red]ERROR ({event.agent_id}): {event.content}[/bold red]")
+    else:
+        display2 = LiveDebateDisplay()
+        with display2.start():
+            async for event in orchestrator.run_debate(prompt, opening_responses):
+                if isinstance(event, AgentResponse):
+                    continue
+
+                match event.type:
+                    case EventType.DEDUP_START:
+                        display2.set_phase(
+                            "Phase 2: Deduplicating Findings",
+                            style="yellow",
                         )
-                    )
+                    case EventType.DEDUP_COMPLETE:
+                        fc = event.metadata.get("findings_count", 0)
+                        dc = event.metadata.get("disagreements_count", 0)
+                        display2.add_status(
+                            Panel(
+                                f"[bold]{fc} findings[/bold] extracted, "
+                                f"[bold]{dc} stark disagreement(s)[/bold]",
+                                title="[bold yellow]Deduplication Complete[/bold yellow]",
+                                border_style="yellow",
+                            )
+                        )
+                    case EventType.TARGETED_DEBATE_START:
+                        display2.clear_agents()
+                        display2.set_phase(
+                            "Phase 3: Targeted Debate (stark disagreements found)",
+                            style="cyan",
+                        )
+                    case EventType.AGENT_STARTED:
+                        display2.agent_started(event.agent_id or "unknown")
+                    case EventType.AGENT_CHUNK:
+                        display2.agent_chunk(event.agent_id or "unknown", event.content)
+                    case EventType.AGENT_COMPLETED:
+                        display2.agent_completed(event.agent_id or "unknown")
+                    case EventType.SYNTHESIS_START:
+                        display2.clear_agents()
+                        display2.set_phase(
+                            "Synthesizing results...",
+                            style="magenta",
+                        )
+                    case EventType.SYNTHESIS_COMPLETE:
+                        synthesis_content = event.content
+                    case EventType.ERROR:
+                        display2.add_status(
+                            Panel(
+                                f"[bold red]{event.content}[/bold red]",
+                                title=f"Error ({event.agent_id or 'unknown'})",
+                                border_style="red",
+                            )
+                        )
 
     # Print synthesis after Live context exits so it stays on screen
     if synthesis_content:
@@ -435,6 +479,13 @@ def main() -> None:
     default=False,
     help="Auto-assign personas to agents that don't have one (use @none to skip)",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Stream raw agent output to terminal for debugging",
+)
 def run(
     prompt: str,
     providers: str,
@@ -446,6 +497,7 @@ def run(
     no_report: bool,
     opening_only: bool,
     auto_persona: bool,
+    verbose: bool,
 ) -> None:
     """Run a multi-perspective analysis.
 
@@ -463,7 +515,7 @@ def run(
     """
     report_dir = None if no_report else ".context/debate"
     anyio.run(
-        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only, auto_persona
+        _run, prompt, providers, max_rounds, cwd, orchestrator_model, report_dir, timeout, max_parallel, opening_only, auto_persona, verbose
     )
 
 

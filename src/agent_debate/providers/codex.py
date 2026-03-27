@@ -28,6 +28,7 @@ class CodexProvider(SubprocessProvider):
         args.extend(["-m", model or self.DEFAULT_MODEL])
         args.extend(["-c", "web_search=live"])
         args.append("--skip-git-repo-check")
+        args.append("--full-auto")
         args.append(instruction)
 
         return args
