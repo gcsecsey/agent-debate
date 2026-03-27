@@ -20,7 +20,7 @@ class TestRound1Prompt:
     def test_contains_structure_guidance(self):
         result = build_round1_prompt("Review auth module")
         assert "### Approach" in result
-        assert "### Key Decisions" in result
+        assert "### Key Points" in result
         assert "### Concerns" in result
 
     def test_no_persona_assignment(self):
