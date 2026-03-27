@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
 
-from agent_debate.server import scan_debates, load_debate
+from agent_debate.server import load_debate, scan_debates, start_server
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "debate.json"
@@ -73,13 +76,6 @@ def test_load_debate_returns_full_json(tmp_path: Path) -> None:
 def test_load_debate_returns_none_for_missing(tmp_path: Path) -> None:
     data = load_debate(str(tmp_path), "nonexistent")
     assert data is None
-
-
-import threading
-import urllib.request
-import urllib.error
-
-from agent_debate.server import start_server
 
 
 def _start_test_server(cwd: str, port: int = 0) -> tuple:

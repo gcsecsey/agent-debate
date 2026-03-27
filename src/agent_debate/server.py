@@ -67,6 +67,9 @@ class DebateViewerHandler(BaseHTTPRequestHandler):
             self._json_response(scan_debates(self.cwd))
         elif self.path.startswith("/api/debates/"):
             timestamp = self.path.split("/api/debates/", 1)[1]
+            if "/" in timestamp or "\\" in timestamp or timestamp.startswith("."):
+                self._error(HTTPStatus.BAD_REQUEST, "Invalid timestamp")
+                return
             data = load_debate(self.cwd, timestamp)
             if data is None:
                 self._error(HTTPStatus.NOT_FOUND, "Debate not found")
