@@ -101,7 +101,12 @@ class Orchestrator:
         # Set up report writer
         if self.config.report_dir:
             self._report = ReportWriter(self.config.report_dir, self.config.cwd)
-            self._report.start_run(prompt, self.config.providers)
+            self._report.start_run(
+                prompt,
+                self.config.providers,
+                orchestrator_model=self.config.orchestrator_model,
+                max_rounds=self.config.max_rounds,
+            )
 
         self._trace = tracing.start_trace(
             name="debate_run",
@@ -213,6 +218,7 @@ class Orchestrator:
             if self._report:
                 self._report.save_synthesis(synthesis)
                 self._report.finalize_readme(synthesis)
+                self._report.write_json()
 
             yield DebateEvent(type=EventType.SYNTHESIS_COMPLETE, content=synthesis)
         finally:

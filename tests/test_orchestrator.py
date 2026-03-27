@@ -776,6 +776,51 @@ class TestRunBackwardCompat:
         assert EventType.SYNTHESIS_COMPLETE in event_types
 
 
+class TestJsonReport:
+    @pytest.mark.anyio
+    async def test_run_writes_json_report(self, tmp_path):
+        """Full run with report_dir produces a debate.json file."""
+        config = DebateConfig(
+            providers=[ProviderConfig(provider="claude", model="agent0")],
+            max_rounds=1,
+            cwd=str(tmp_path),
+            report_dir=".context/debate",
+        )
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.config = config
+        orch._report = None
+        orch._trace = None
+        orch._providers = {"claude": FakeProvider(["Agent response content"])}
+
+        async def fake_call_orchestrator(prompt, model=None):
+            if model == "haiku":
+                return VALID_DEDUP_JSON, None
+            return "Final synthesis", None
+
+        orch._call_orchestrator = fake_call_orchestrator  # type: ignore[assignment]
+
+        events = []
+        async for event in orch.run("test prompt"):
+            events.append(event)
+
+        # Find the report directory
+        debate_dir = tmp_path / ".context" / "debate"
+        assert debate_dir.exists()
+        run_dirs = list(debate_dir.iterdir())
+        assert len(run_dirs) == 1
+
+        json_path = run_dirs[0] / "debate.json"
+        assert json_path.exists()
+
+        data = json.loads(json_path.read_text())
+        assert data["version"] == 1
+        assert data["meta"]["prompt"] == "test prompt"
+        assert data["meta"]["orchestrator_model"] == "sonnet"
+        assert data["meta"]["max_rounds"] == 1
+        assert len(data["opening"]["responses"]) == 1
+        assert data["synthesis"]["content"] == "Final synthesis"
+
+
 class TestTwoPhaseIntegration:
     @pytest.mark.anyio
     async def test_opening_then_debate_produces_same_result_as_run(self):
