@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -17,14 +18,43 @@ class ReportWriter:
         self.run_dir = Path(cwd) / base_dir / timestamp
         self._agents_dir = self.run_dir / "agents"
         self._debate_dir = self.run_dir / "debate"
+        self._json_data: dict = {}
 
-    def start_run(self, prompt: str, providers: list[ProviderConfig]) -> Path:
+    def start_run(
+        self,
+        prompt: str,
+        providers: list[ProviderConfig],
+        orchestrator_model: str = "sonnet",
+        max_rounds: int = 1,
+    ) -> Path:
         """Create the run directory and write the README header."""
         self._agents_dir.mkdir(parents=True, exist_ok=True)
 
-        agents_list = ", ".join(
-            pc.agent_id for pc in providers
-        )
+        self._json_data = {
+            "version": 1,
+            "meta": {
+                "prompt": prompt,
+                "providers": [
+                    {
+                        "provider": pc.provider,
+                        "model": pc.model,
+                        "agent_id": pc.agent_id,
+                    }
+                    for pc in providers
+                ],
+                "orchestrator_model": orchestrator_model,
+                "max_rounds": max_rounds,
+                "cwd": str(self.run_dir.parent.parent),
+                "started_at": datetime.now().isoformat(),
+                "completed_at": None,
+            },
+            "opening": {"responses": []},
+            "dedup": None,
+            "debate": None,
+            "synthesis": None,
+        }
+
+        agents_list = ", ".join(pc.agent_id for pc in providers)
         readme = (
             f"# Analysis Run\n\n"
             f"**Prompt:** {prompt}\n\n"
@@ -43,6 +73,13 @@ class ReportWriter:
             f"{response.content}\n"
         )
         path.write_text(content)
+
+        self._json_data["opening"]["responses"].append({
+            "agent_id": response.agent_id,
+            "provider": response.provider,
+            "model": response.model,
+            "content": response.content,
+        })
 
     def save_dedup(
         self,
@@ -78,6 +115,26 @@ class ReportWriter:
 
         (self.run_dir / "dedup.md").write_text("\n".join(lines))
 
+        self._json_data["dedup"] = {
+            "findings": [
+                {
+                    "topic": f.topic,
+                    "description": f.description,
+                    "agents": f.agents,
+                    "severity": f.severity,
+                }
+                for f in findings
+            ],
+            "disagreements": [
+                {
+                    "topic": d.topic,
+                    "positions": d.positions,
+                }
+                for d in disagreements
+            ],
+            "raw_reasoning": raw_reasoning,
+        }
+
     def save_debate_response(self, response: AgentResponse) -> None:
         """Save a targeted debate response to debate/<agent_id>.md."""
         self._debate_dir.mkdir(parents=True, exist_ok=True)
@@ -89,10 +146,27 @@ class ReportWriter:
         )
         path.write_text(content)
 
+        if self._json_data["debate"] is None:
+            self._json_data["debate"] = {"responses": []}
+        self._json_data["debate"]["responses"].append({
+            "agent_id": response.agent_id,
+            "provider": response.provider,
+            "model": response.model,
+            "content": response.content,
+        })
+
     def save_synthesis(self, content: str) -> None:
         """Save the final synthesis."""
         (self.run_dir / "synthesis.md").write_text(
             f"# Final Synthesis\n\n{content}\n"
+        )
+        self._json_data["synthesis"] = {"content": content}
+
+    def write_json(self) -> None:
+        """Write the accumulated JSON data to debate.json."""
+        self._json_data["meta"]["completed_at"] = datetime.now().isoformat()
+        (self.run_dir / "debate.json").write_text(
+            json.dumps(self._json_data, indent=2, ensure_ascii=False) + "\n"
         )
 
     def finalize_readme(self, synthesis: str) -> None:
