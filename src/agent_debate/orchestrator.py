@@ -79,8 +79,8 @@ class Orchestrator:
                 "Install at least one provider CLI."
             )
 
-    def _agent_id(self, index: int, pc: ProviderConfig) -> str:
-        """Generate a unique agent ID, handling duplicates."""
+    def _agent_id(self, index: int, pc: ProviderConfig, persona: str | None = None) -> str:
+        """Generate a unique agent ID, including persona if present."""
         base = pc.agent_id
         all_ids = [p.agent_id for p in self.config.providers]
         if all_ids.count(base) > 1:
@@ -89,7 +89,9 @@ class Orchestrator:
                 for i, p in enumerate(self.config.providers[:index])
                 if p.agent_id == base
             )
-            return f"{base}#{occurrence + 1}"
+            base = f"{base}#{occurrence + 1}"
+        if persona and persona != "none":
+            base = f"{base} ({persona})"
         return base
 
     async def run_opening(self, prompt: str) -> AsyncIterator[DebateEvent]:
@@ -245,11 +247,31 @@ class Orchestrator:
                 self._trace = None
 
     def _resolve_personas(self) -> list[str | None]:
-        """Resolve personas for all providers, auto-assigning if none are explicit."""
+        """Resolve personas for all providers.
+
+        - No explicit @persona on any provider: auto-assign all from rotation
+        - Any explicit @persona: use as-is, unset slots stay None
+        - @none: explicitly skip persona for that agent (resolves to None)
+        - --auto-persona flag: fill unset slots from rotation even when some are explicit
+        """
         explicit = [pc.persona for pc in self.config.providers]
-        if any(p is not None for p in explicit):
-            return explicit
-        return auto_assign_personas(len(self.config.providers))
+        # Normalize @none to None
+        normalized = [None if p == "none" else p for p in explicit]
+
+        has_any_explicit = any(p is not None for p in explicit)
+        if not has_any_explicit:
+            # No one specified anything — auto-assign all
+            return auto_assign_personas(len(normalized))
+
+        if self.config.auto_persona:
+            # Fill unset slots from rotation, but respect @none
+            rotation = auto_assign_personas(len(normalized))
+            return [
+                n if n is not None or explicit[i] == "none" else rotation[i]
+                for i, n in enumerate(normalized)
+            ]
+
+        return normalized
 
     async def _fan_out_streaming(
         self,
@@ -266,9 +288,9 @@ class Orchestrator:
         async def run_agent(index: int, pc: ProviderConfig) -> None:
             async with self._semaphore:
                 provider = self._providers[pc.provider]
-                agent_id = self._agent_id(index, pc)
-                full_prompt = build_round1_prompt(prompt)
                 persona = personas[index]
+                agent_id = self._agent_id(index, pc, persona)
+                full_prompt = build_round1_prompt(prompt)
                 system_prompt = get_persona_instruction(persona) if persona else ""
 
                 await queue.put(
@@ -371,7 +393,8 @@ class Orchestrator:
         async def run_debate_agent(index: int, pc: ProviderConfig) -> None:
             async with self._semaphore:
                 provider = self._providers[pc.provider]
-                agent_id = self._agent_id(index, pc)
+                persona = personas[index]
+                agent_id = self._agent_id(index, pc, persona)
 
                 own_prior = response_by_id.get(agent_id)
                 if own_prior is None:
@@ -386,7 +409,6 @@ class Orchestrator:
                     disagreements=disagreements,
                     other_responses=others,
                 )
-                persona = personas[index]
                 system_prompt = get_persona_instruction(persona) if persona else ""
 
                 await queue.put(

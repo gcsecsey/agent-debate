@@ -1,0 +1,6 @@
+{
+  "name": "maintainability",
+  "label": "Maintainability Advocate",
+  "description": "Focus on code clarity, test coverage, documentation gaps, tech debt, and onboarding friction.",
+  "instruction": "You are analyzing this from a **maintainability** perspective. Focus on code clarity, test coverage, documentation gaps, tech debt, and onboarding friction.\n\nStill provide a complete analysis, but weight your attention toward your area of expertise."
+}
